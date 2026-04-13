@@ -2,6 +2,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import Sidebar from '@/components/Sidebar'
 import { getTasks, saveTasks, addTask, updateTask, deleteTask, getMeetings, saveMeeting, TASK_TYPES, TASK_STATUS, buildParsePrompt } from '@/lib/tasks'
+import { createJob, updateJob } from '@/lib/agent-jobs'
+import { draftRecap } from '@/lib/recap'
 import { getCompiledPrompt } from '@/components/AgentInstructionsTab'
 import { getRefinedPrompt } from '@/components/AIConfigChat'
 import { getConfig } from '@/lib/config'
@@ -78,8 +80,10 @@ export default function TasksPage() {
     }
   }
 
-  // Accept parsed items as tasks
-  function handleAcceptAll() {
+  // Accept parsed items as tasks, then auto-queue downstream agent jobs
+  // (StoneProfits quote + Outlook recap). The recap drafting runs in the
+  // background against the Claude API and writes back to the job when done.
+  async function handleAcceptAll() {
     if (!parsedItems) return
     let updated = tasks
     const meeting = saveMeeting({ contact: contactName, property: propertyAddress, notes, task_count: parsedItems.length })
@@ -98,6 +102,59 @@ export default function TasksPage() {
       })
     })
     setTasks(updated)
+
+    // Queue browser-agent jobs so the Pipeline card has something to act on.
+    // Only queue sp_quote if the meeting actually produced a QUOTE task —
+    // otherwise there's nothing to create in StoneProfits.
+    const hasQuoteTask = parsedItems.some(i => i.type === 'QUOTE')
+    const materials = parsedItems.map(i => i.materials).filter(Boolean).join(', ')
+
+    try {
+      if (hasQuoteTask) {
+        await createJob({
+          kind: 'sp_quote',
+          priority: 3,
+          meeting_id: meeting.id,
+          payload: {
+            contact: contactName,
+            property: propertyAddress,
+            materials,
+            notes,
+            source: 'meeting_notes',
+          },
+        })
+      }
+      const recapJob = await createJob({
+        kind: 'outlook_recap',
+        priority: 4,
+        meeting_id: meeting.id,
+        payload: {
+          contact: contactName,
+          property: propertyAddress,
+          notes,
+          drafted: null, // filled in by draftRecap below
+        },
+      })
+
+      // Fire the recap draft in background. Any failure is surfaced via
+      // the job's error field on the Pipeline page — we don't block the
+      // UI on it since the user just wants to get to the next meeting.
+      draftRecap({ notes, contact: contactName, property: propertyAddress })
+        .then(drafted => {
+          updateJob(recapJob.id, {
+            payload: { ...recapJob.payload, drafted },
+          })
+        })
+        .catch(err => {
+          updateJob(recapJob.id, {
+            status: 'needs_review',
+            error: err.message,
+          })
+        })
+    } catch (e) {
+      console.warn('Failed to queue agent jobs:', e)
+    }
+
     setParsedItems(null)
     setNotes('')
     setContactName('')
