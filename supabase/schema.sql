@@ -154,6 +154,45 @@ create table outreach (
   updated_at timestamptz default now()
 );
 
+-- Bulk CSV uploads seeded from StoneProfits exports, client lists, etc.
+-- Rows are stored inline as JSONB so downstream agents can query deltas
+-- without paginating through a separate row table. For very large CSVs
+-- (>~50MB) move rows to a dedicated upload_rows table.
+create table uploads (
+  id text primary key,
+  name text not null,
+  kind text not null,
+  description text,
+  headers jsonb,
+  rows jsonb,
+  row_count integer default 0,
+  uploaded_at timestamptz default now()
+);
+create index idx_uploads_kind on uploads(kind);
+
+-- Queue of work items for browser agents (Claude-in-Chrome) to pick up.
+-- The worker polls this table, claims a job, executes it (slowly, in the
+-- background), and writes results back via `result` / `status`.
+--
+-- kind values: 'sp_quote', 'sp_quote_update', 'outlook_recap',
+--              'outlook_search', 'ig_daily_scroll', 'portal_scan'
+create table agent_jobs (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null,
+  status text not null default 'queued', -- queued | running | needs_review | done | failed
+  priority integer default 5,             -- 1 (urgent) .. 10 (background)
+  payload jsonb,                           -- inputs the agent needs
+  result jsonb,                            -- structured output from the agent
+  error text,
+  meeting_id text,                         -- FK to meetings (loose)
+  property_id uuid,                        -- FK to properties (loose)
+  created_at timestamptz default now(),
+  started_at timestamptz,
+  completed_at timestamptz
+);
+create index idx_agent_jobs_status on agent_jobs(status, priority, created_at);
+create index idx_agent_jobs_kind on agent_jobs(kind);
+
 -- Indexes
 create index idx_properties_priority on properties(priority);
 create index idx_properties_status on properties(status);
