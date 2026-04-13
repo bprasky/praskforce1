@@ -3,13 +3,15 @@ import { useState, useEffect } from 'react'
 import Sidebar from '@/components/Sidebar'
 import CredentialsTab from '@/components/CredentialsTab'
 import AgentInstructionsTab from '@/components/AgentInstructionsTab'
+import DataUploadTab from '@/components/DataUploadTab'
 import { getConfig, saveConfig, resetConfig, DEFAULT_CONFIG } from '@/lib/config'
-import { Globe, SlidersHorizontal, ShieldCheck, Database, Bell, RotateCcw, Plus, Trash2, Check, ExternalLink, ToggleLeft, ToggleRight, Save, AlertTriangle, Bot, BookOpen, Cloud } from 'lucide-react'
+import { Globe, SlidersHorizontal, ShieldCheck, Database, Bell, RotateCcw, Plus, Trash2, Check, ExternalLink, ToggleLeft, ToggleRight, Save, AlertTriangle, Bot, BookOpen, Cloud, Upload } from 'lucide-react'
 
 const TABS = [
   { id: 'portals', label: 'Portals', icon: Globe },
   { id: 'credentials', label: 'Credentials', icon: ShieldCheck },
   { id: 'instructions', label: 'Agent Instructions', icon: BookOpen },
+  { id: 'data', label: 'Data Upload', icon: Upload },
   { id: 'filters', label: 'Scan Filters', icon: SlidersHorizontal },
   { id: 'ai', label: 'AI & Outreach', icon: Bot },
   { id: 'crm', label: 'CRM / StoneProfits', icon: Database },
@@ -645,6 +647,7 @@ export default function SettingsPage() {
     portals: PortalsTab,
     credentials: CredentialsTab,
     instructions: AgentInstructionsTab,
+    data: DataUploadTab,
     filters: FiltersTab,
     ai: AIOutreachTab,
     crm: CRMTab,
