@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react'
 import { DEMO_PROPERTIES } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
-import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock } from 'lucide-react'
+import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock, Instagram, Mail } from 'lucide-react'
 
 const PRI = {
   highest: { label: 'HIGHEST', bg: 'bg-red-600', text: 'text-white', dot: 'bg-red-500' },
@@ -132,8 +132,8 @@ export default function Dashboard() {
       <main className="ml-56">
         <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-bold text-gray-900">Pipeline</h1>
-            <p className="text-xs text-gray-500">Ranked property leads — click any row to expand</p>
+            <h1 className="text-lg font-bold text-gray-900">Leads</h1>
+            <p className="text-xs text-gray-500">Permit activity & social signals — ranked by compatibility score</p>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-400"><Clock size={12} /> Demo Mode</div>
         </header>
@@ -182,7 +182,11 @@ export default function Dashboard() {
             <div className="text-xs text-gray-400">{filtered.length} results</div>
           </div>
 
-          {/* Table */}
+          {/* Permit activity table */}
+          <div className="flex items-center gap-2 mb-2 mt-2">
+            <FileText size={14} className="text-gray-400" />
+            <h2 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Permit Activity</h2>
+          </div>
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             <table className="w-full">
               <thead>
@@ -196,6 +200,42 @@ export default function Dashboard() {
                 {filtered.map(p => <Row key={p.id} p={p} open={openId === p.id} toggle={() => setOpenId(openId === p.id ? null : p.id)} />)}
               </tbody>
             </table>
+          </div>
+
+          {/* Social Signals */}
+          <div className="flex items-center gap-2 mb-2 mt-8">
+            <Instagram size={14} className="text-gray-400" />
+            <h2 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Social Signals</h2>
+            <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 font-medium">Not configured</span>
+          </div>
+          <div className="bg-white rounded-lg border border-dashed border-gray-300 p-6">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center shrink-0">
+                <Instagram size={18} className="text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">Monitor Instagram without scrolling all day</h3>
+                <p className="text-xs text-gray-600 leading-relaxed mb-3">
+                  Cross-reference your client list and email history against recent Instagram activity —
+                  posts, tagged projects, new followers. Posts that match a known client or property in your pipeline
+                  surface here automatically as follow-up leads, scored the same way as permit signals.
+                </p>
+                <div className="grid grid-cols-3 gap-3 mb-3 text-[11px]">
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Users size={12} /> Client list source: <span className="text-gray-400 italic">not connected</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Mail size={12} /> Email history: <span className="text-gray-400 italic">Outlook not linked</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Instagram size={12} /> IG watchlist: <span className="text-gray-400 italic">0 handles</span>
+                  </div>
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  Configure in <a href="/settings" className="text-amber-600 hover:underline">Settings → Integrations</a> once Instagram, Outlook, and client list sources are wired up.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </main>

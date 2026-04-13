@@ -2,10 +2,11 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Settings, Radar, Users, FileText, Database, Zap, CheckSquare } from 'lucide-react'
+import { Briefcase, Settings, Radar, Users, FileText, Database, Zap, CheckSquare, Flame } from 'lucide-react'
 
 const NAV = [
-  { href: '/', label: 'Pipeline', icon: LayoutDashboard },
+  { href: '/', label: 'Leads', icon: Flame },
+  { href: '/pipeline', label: 'Pipeline', icon: Briefcase },
   { href: '/accounts', label: 'Accounts', icon: Users },
   { href: '/tasks', label: 'Tasks', icon: CheckSquare },
   { href: '/agents', label: 'Run Agents', icon: Radar },
