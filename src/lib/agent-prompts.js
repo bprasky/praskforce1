@@ -5,6 +5,120 @@
 import { getConfig } from '@/lib/config'
 import { DEMO_PROPERTIES } from '@/lib/supabase'
 
+// ── Proposal Generation Prompt ───────────────────────────────────────────────
+// Used by src/lib/task-proposals.js. Given a new task, its context, and a
+// shortlist of similar historical resolutions, ask Claude to recommend a
+// concrete action. Critical: the prompt instructs Claude to be honest
+// about confidence — "I don't have enough data" is always allowed and is
+// preferred over a confident wrong guess.
+
+export function buildProposalPrompt({ task, snapshot, matches, patterns = [] }) {
+  const matchBlock = matches.map((m, i) => {
+    const r = m.resolution
+    return `[${i + 1}] score=${m.score.toFixed(2)} | outcome=${r.resolution_outcome || 'unknown'} | channel=${r.resolution_channel || '—'}
+    action: ${r.resolution_action || '(no action recorded)'}
+    why:    ${r.resolution_notes || '(no rationale captured)'}
+    context: price_tier=${r.price_tier || '?'}, owner=${r.owner_type || '?'}, contact=${r.contact_role || '?'}, stage=${r.deal_stage || '?'}, attempt=${r.outreach_attempt_number || '?'}`
+  }).join('\n')
+
+  const patternBlock = patterns.length > 0
+    ? patterns.slice(0, 5).map(p =>
+        `- ${p.task_category} / ${p.price_tier || '*'} / ${p.owner_type || '*'} / ${p.contact_role || '*'}: ` +
+        `winning_channel=${p.winning_channel || '?'}, success_rate=${(p.success_rate * 100).toFixed(0)}%, n=${p.sample_size}`
+      ).join('\n')
+    : '(no aggregated patterns yet for this category)'
+
+  return `You are a task resolution advisor for a luxury stone & surface sales rep in Miami. You are looking at a new task and a shortlist of similar historical resolutions. Your job is to recommend a specific next action — or to honestly say you don't have enough data.
+
+CURRENT TASK
+- Category: ${task.type}
+- Description: ${task.description || '(no description)'}
+- Contact: ${task.contact || '—'}
+- Property: ${task.property || '—'}
+- Materials: ${task.materials || '—'}
+- Deadline: ${task.deadline || '—'}
+
+CONTEXT SNAPSHOT
+${JSON.stringify(snapshot, null, 2)}
+
+SIMILAR HISTORICAL RESOLUTIONS (ranked by relevance):
+${matchBlock || '(no historical resolutions matched)'}
+
+AGGREGATED PATTERNS FOR THIS CATEGORY
+${patternBlock}
+
+INSTRUCTIONS
+1. Recommend a CONCRETE action — not "follow up" but "send email to the architect referencing the permit timeline, ask if they have a stone allowance defined yet."
+2. Pick the channel from this list: email, phone, whatsapp, instagram_dm, linkedin, in_person, showroom, sample_box, system_action.
+3. Estimate the timeline for response based on history.
+4. Set confidence between 0.0 and 1.0. If the historical evidence is thin, contradictory, or unclear, drop confidence below 0.5 and SAY SO in the reasoning. A wrong confident proposal destroys trust faster than no proposal at all.
+5. Reasoning should reference the historical resolutions by index (e.g. "match [1] and [3] both won via in-person showroom visits").
+
+Respond with ONLY a JSON object (no other text, no markdown):
+{
+  "proposed_action": "specific action to take",
+  "proposed_channel": "channel id from the list above",
+  "expected_timeline": "human description, e.g. '48 hours' or '1 week if architect responds'",
+  "confidence": 0.0,
+  "reasoning": "why this is the right move, referencing match indices",
+  "matched_pattern_summary": "1-sentence description of the winning pattern, or null if no clear pattern"
+}`
+}
+
+// ── Per-Task Chat Prompt ─────────────────────────────────────────────────────
+// Used by TaskChat.js. Brad types something like "called the architect,
+// he's out until the 20th, push this back" — Claude acknowledges, extracts
+// the resolution data, and proposes any follow-up tasks. The structured
+// output drops straight into createResolution / addTask.
+
+export function buildTaskChatPrompt({ task, snapshot, matches, message, history }) {
+  const historyBlock = history.length > 0
+    ? history.map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n')
+    : '(no prior turns)'
+
+  const matchBlock = matches.slice(0, 3).map((m, i) =>
+    `[${i + 1}] ${m.resolution.resolution_action || '(no action)'} → ${m.resolution.resolution_outcome || 'unknown'}`
+  ).join('\n') || '(no relevant history)'
+
+  return `You are a task resolution assistant. The user (Brad) is updating you on a task he's working. Your job: (1) acknowledge briefly, (2) extract structured resolution data if he described what happened, (3) extract any follow-up tasks he implied, (4) ask a focused clarifying question if something important is missing.
+
+TASK
+- Category: ${task.type}
+- Description: ${task.description || '(none)'}
+- Contact: ${task.contact || '—'}
+- Property: ${task.property || '—'}
+
+CONTEXT SNAPSHOT
+${JSON.stringify(snapshot, null, 2)}
+
+RELEVANT HISTORICAL RESOLUTIONS
+${matchBlock}
+
+CONVERSATION SO FAR
+${historyBlock}
+
+NEW MESSAGE FROM BRAD
+${message}
+
+Respond with ONLY a JSON object (no markdown, no other text):
+{
+  "reply": "short conversational acknowledgement to Brad — 1-2 sentences max",
+  "extracted_resolution": {
+    "resolution_action": "what was done, or null if nothing actionable yet",
+    "resolution_channel": "channel id or null",
+    "resolution_outcome": "outcome id or null",
+    "resolution_notes": "WHY this was the move, or null"
+  } | null,
+  "followup_tasks": [
+    { "type": "FOLLOW_UP|EMAIL|SCHEDULE|...", "description": "...", "deadline": "ISO date or null", "priority": "high|medium|low" }
+  ],
+  "needs_clarification": "question to ask, or null"
+}
+
+Channel ids: email, phone, whatsapp, instagram_dm, linkedin, in_person, showroom, sample_box, system_action.
+Outcome ids: meeting_booked, quote_requested, info_gathered, no_response, declined, deferred, escalated.`
+}
+
 export function generateAgentPrompt(taskId, context = {}) {
   const config = getConfig()
 

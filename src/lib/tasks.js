@@ -26,6 +26,25 @@ export const TASK_STATUS = {
   failed: { label: 'Failed', color: 'text-red-600', bg: 'bg-red-50' },
 }
 
+// Learning-layer lifecycle. Lives alongside `status` (which still drives
+// the existing run/review/done UI) so the new resolution flow can be
+// rolled out without breaking existing task interactions.
+//
+//   CREATED → PROPOSED → ACTIVE → RESOLVING → RESOLVED
+//
+// CREATED   — task entered the system, context snapshot built
+// PROPOSED  — system has run the matcher (proposal may or may not exist)
+// ACTIVE    — user accepted/corrected the proposal and is working it
+// RESOLVING — user is logging the resolution
+// RESOLVED  — resolution stored; pattern tables updated
+export const LIFECYCLE_STAGES = ['CREATED', 'PROPOSED', 'ACTIVE', 'RESOLVING', 'RESOLVED']
+
+export function nextLifecycle(stage) {
+  const idx = LIFECYCLE_STAGES.indexOf(stage)
+  if (idx < 0 || idx >= LIFECYCLE_STAGES.length - 1) return stage
+  return LIFECYCLE_STAGES[idx + 1]
+}
+
 // ── Storage ──
 
 export function getTasks() {
@@ -43,6 +62,7 @@ export function addTask(task) {
     id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
     created_at: new Date().toISOString(),
     status: 'pending',
+    lifecycle: 'CREATED',
     ...task,
   }
   tasks.unshift(record)

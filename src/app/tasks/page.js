@@ -1,13 +1,25 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import Sidebar from '@/components/Sidebar'
-import { getTasks, saveTasks, addTask, updateTask, deleteTask, getMeetings, saveMeeting, TASK_TYPES, TASK_STATUS, buildParsePrompt } from '@/lib/tasks'
+import { getTasks, saveTasks, addTask, updateTask, deleteTask, getMeetings, saveMeeting, TASK_TYPES, TASK_STATUS, LIFECYCLE_STAGES, buildParsePrompt } from '@/lib/tasks'
 import { createJob, updateJob } from '@/lib/agent-jobs'
 import { draftRecap } from '@/lib/recap'
 import { getCompiledPrompt } from '@/components/AgentInstructionsTab'
 import { getRefinedPrompt } from '@/components/AIConfigChat'
 import { getConfig } from '@/lib/config'
-import { Plus, X, Send, Play, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter } from 'lucide-react'
+import {
+  LIFECYCLE,
+  findSimilarResolutions,
+  buildContextSnapshot,
+  getLatestProposalForTask,
+  updateProposal,
+  computeMetrics,
+} from '@/lib/task-learning'
+import { generateProposal } from '@/lib/task-proposals'
+import TaskProposalCard from '@/components/TaskProposalCard'
+import TaskResolutionPanel from '@/components/TaskResolutionPanel'
+import TaskChat from '@/components/TaskChat'
+import { Plus, X, Send, Play, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter, Sparkles, MessageCircle, TrendingUp } from 'lucide-react'
 
 function formatDate(iso) {
   if (!iso) return ''
@@ -31,7 +43,87 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState('active')
   const [expandedId, setExpandedId] = useState(null)
 
+  // Learning layer per-task state, keyed by task.id:
+  //   proposals[id]   = { proposal, matches } from generateProposal()
+  //   matches[id]     = matched historical resolutions for the history ribbon
+  //   resolvingId     = task currently in the resolve panel (only one at a time)
+  //   chatOpenId      = task with the chat thread open
+  //   proposingId     = task currently waiting on a proposal generation call
+  const [proposals, setProposals] = useState({})
+  const [matchesByTask, setMatchesByTask] = useState({})
+  const [resolvingId, setResolvingId] = useState(null)
+  const [chatOpenId, setChatOpenId] = useState(null)
+  const [proposingId, setProposingId] = useState(null)
+  const [metrics, setMetrics] = useState(null)
+
   useEffect(() => { setTasks(getTasks()) }, [])
+
+  // Refresh learning metrics whenever the task list changes — this drives
+  // the adoption-curve banner at the top of the page.
+  useEffect(() => {
+    computeMetrics(7).then(setMetrics).catch(() => {})
+  }, [tasks])
+
+  // When the user expands a task, lazily look up any existing proposal +
+  // matching history. Cached in state so re-expanding doesn't re-query.
+  useEffect(() => {
+    if (!expandedId || proposals[expandedId] !== undefined) return
+    const task = tasks.find(t => t.id === expandedId)
+    if (!task) return
+    const snapshot = buildContextSnapshot(task)
+    Promise.all([
+      getLatestProposalForTask(task.id),
+      findSimilarResolutions(task.type, snapshot, 5),
+    ]).then(([proposal, matches]) => {
+      setProposals(p => ({ ...p, [task.id]: proposal || null }))
+      setMatchesByTask(m => ({ ...m, [task.id]: matches }))
+    })
+  }, [expandedId])
+
+  async function handleGenerateProposal(task) {
+    setProposingId(task.id)
+    try {
+      const result = await generateProposal({ task })
+      setProposals(p => ({ ...p, [task.id]: result.proposal }))
+      setMatchesByTask(m => ({ ...m, [task.id]: result.matches }))
+      const updated = updateTask(task.id, { lifecycle: 'PROPOSED' })
+      setTasks(updated)
+    } catch (e) {
+      console.warn('Proposal generation failed', e)
+    } finally {
+      setProposingId(null)
+    }
+  }
+
+  async function handleAcceptProposal(task) {
+    const proposal = proposals[task.id]
+    if (proposal) await updateProposal(proposal.id, { status: 'accepted' })
+    const updated = updateTask(task.id, { lifecycle: 'ACTIVE' })
+    setTasks(updated)
+    setResolvingId(task.id)
+  }
+
+  async function handleCorrectProposal(task) {
+    const updated = updateTask(task.id, { lifecycle: 'RESOLVING' })
+    setTasks(updated)
+    setResolvingId(task.id)
+  }
+
+  async function handleRejectProposal(task) {
+    const proposal = proposals[task.id]
+    if (proposal) {
+      await updateProposal(proposal.id, { status: 'rejected' })
+      setProposals(p => ({ ...p, [task.id]: null }))
+    }
+  }
+
+  function handleResolved(task) {
+    const updated = updateTask(task.id, { lifecycle: 'RESOLVED', status: 'done' })
+    setTasks(updated)
+    setResolvingId(null)
+    // Force-refresh matches so future tasks pick up this fresh resolution.
+    setMatchesByTask(m => ({ ...m, [task.id]: undefined }))
+  }
 
   const filtered = useMemo(() => {
     if (statusFilter === 'active') return tasks.filter(t => t.status !== 'done')
@@ -195,7 +287,7 @@ export default function TasksPage() {
 
         <div className="p-6">
           {/* Stats */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-4 gap-4 mb-4">
             {[
               { l: 'Total Tasks', v: stats.total, c: 'text-gray-900' },
               { l: 'Pending / Ready', v: stats.pending, c: 'text-amber-600' },
@@ -208,6 +300,44 @@ export default function TasksPage() {
               </div>
             ))}
           </div>
+
+          {/* Learning adoption banner — the key signal that the system is
+              getting smarter over time. acceptance_rate should trend up;
+              coverage_rate climbs as more resolutions are stored. */}
+          {metrics && metrics.total_tasks > 0 && (
+            <div className="bg-white border border-purple-200 rounded-lg px-4 py-3 mb-4 flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <TrendingUp size={14} className="text-purple-600" />
+                <span className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider">
+                  Learning · last 7 days
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-500 uppercase">Acceptance</span>
+                <span className="text-sm font-bold text-green-600">
+                  {Math.round(metrics.acceptance_rate * 100)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-500 uppercase">Coverage</span>
+                <span className="text-sm font-bold text-blue-600">
+                  {Math.round(metrics.coverage_rate * 100)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-500 uppercase">Corrections</span>
+                <span className="text-sm font-bold text-amber-600">
+                  {metrics.proposals_corrected}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-500 uppercase">Avg Confidence</span>
+                <span className="text-sm font-bold text-gray-700">
+                  {Math.round(metrics.avg_confidence * 100)}%
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Meeting Notes Input */}
           {showInput && (
@@ -309,6 +439,11 @@ export default function TasksPage() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-[10px] text-gray-400">{formatDate(task.created_at)}</span>
+                      {task.lifecycle && LIFECYCLE[task.lifecycle] && (
+                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wider ${LIFECYCLE[task.lifecycle].bg} ${LIFECYCLE[task.lifecycle].color}`}>
+                          {LIFECYCLE[task.lifecycle].label}
+                        </span>
+                      )}
                       <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${ts.bg} ${ts.color}`}>{ts.label}</span>
                       {task.status === 'ready' && (
                         <button onClick={e => { e.stopPropagation(); handleStatusChange(task.id, 'needs_review') }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px] font-medium hover:bg-amber-600 flex items-center gap-1" title="Run this task">
@@ -322,7 +457,96 @@ export default function TasksPage() {
                   </div>
 
                   {isOpen && (
-                    <div className="border-t border-gray-100 px-4 py-3 bg-gray-50/50">
+                    <div className="border-t border-gray-100 px-4 py-3 bg-gray-50/50 space-y-3">
+                      {/* Learning layer: proposal → resolve → chat */}
+                      {(() => {
+                        const proposal = proposals[task.id]
+                        const matches = matchesByTask[task.id] || []
+                        const isResolving = resolvingId === task.id
+                        const isChatOpen = chatOpenId === task.id
+
+                        return (
+                          <div className="space-y-3">
+                            {/* No proposal yet — offer to generate one (or
+                                explain that there isn't enough history) */}
+                            {proposal === null && !isResolving && task.status !== 'done' && (
+                              <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between">
+                                <div className="text-[11px] text-gray-600">
+                                  {matches.length > 0
+                                    ? `${matches.length} similar historical task${matches.length === 1 ? '' : 's'} found.`
+                                    : 'No matching history yet — the system needs more resolutions on this type of situation.'}
+                                </div>
+                                <button
+                                  onClick={() => handleGenerateProposal(task)}
+                                  disabled={proposingId === task.id}
+                                  className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 ${
+                                    proposingId === task.id
+                                      ? 'bg-gray-200 text-gray-500'
+                                      : 'bg-amber-500 text-white hover:bg-amber-600'
+                                  }`}
+                                >
+                                  <Sparkles size={12} />
+                                  {proposingId === task.id ? 'Thinking…' : 'Propose Action'}
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Proposal exists and we're not yet in resolve
+                                mode — show it with Accept/Correct/Reject */}
+                            {proposal && !isResolving && task.status !== 'done' && (
+                              <TaskProposalCard
+                                proposal={proposal}
+                                matches={matches}
+                                onAccept={() => handleAcceptProposal(task)}
+                                onCorrect={() => handleCorrectProposal(task)}
+                                onReject={() => handleRejectProposal(task)}
+                              />
+                            )}
+
+                            {/* Resolution capture panel */}
+                            {isResolving && (
+                              <TaskResolutionPanel
+                                task={task}
+                                proposal={proposal}
+                                onResolved={() => handleResolved(task)}
+                                onCancel={() => setResolvingId(null)}
+                              />
+                            )}
+
+                            {/* Per-task chat */}
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setChatOpenId(isChatOpen ? null : task.id)}
+                                className="text-[11px] text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                              >
+                                <MessageCircle size={12} />
+                                {isChatOpen ? 'Close chat' : 'Open chat to explain or update this task'}
+                              </button>
+                              {!isResolving && task.status !== 'done' && (
+                                <button
+                                  onClick={() => setResolvingId(task.id)}
+                                  className="text-[11px] text-purple-600 hover:text-purple-800 flex items-center gap-1"
+                                >
+                                  <CheckCircle size={12} /> Log resolution manually
+                                </button>
+                              )}
+                            </div>
+
+                            {isChatOpen && (
+                              <TaskChat
+                                task={task}
+                                onClose={() => setChatOpenId(null)}
+                                onResolutionLogged={() => {
+                                  const updated = updateTask(task.id, { lifecycle: 'RESOLVED', status: 'done' })
+                                  setTasks(updated)
+                                }}
+                                onTasksAdded={() => setTasks(getTasks())}
+                              />
+                            )}
+                          </div>
+                        )
+                      })()}
+
                       <div className="grid grid-cols-3 gap-4 text-xs">
                         <div>
                           <span className="text-gray-400 text-[10px] font-medium uppercase">Description</span>
