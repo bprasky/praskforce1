@@ -86,6 +86,10 @@ export const DEFAULT_CONFIG = {
     api_key: '',
     tone: 'professional_casual',
     context: 'ARCA Worldwide is a natural stone importer based in Miami. We work with luxury residential developers, architects, and designers. We offer premium marble, limestone, travertine, porcelain, and hardwoods. Our differentiator is direct import pricing (we own quarries) and exclusive materials.',
+    // Recap drafting prompt — editable per user. Empty string falls back
+    // to DEFAULT_RECAP_PROMPT in src/lib/recap.js. Supports placeholders:
+    // {{notes}}, {{contact}}, {{property}}, {{senderName}}
+    recap_prompt_template: '',
   },
 
   // Supabase

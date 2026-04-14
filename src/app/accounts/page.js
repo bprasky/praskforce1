@@ -1,208 +1,94 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import Sidebar from '@/components/Sidebar'
-import { DEMO_ACCOUNTS } from '@/lib/accounts'
-import { PRODUCT_TIERS } from '@/lib/targeting'
-import { ChevronDown, ChevronRight, ExternalLink, Building2, Link2, Users, Search, DollarSign, Send, Instagram, Linkedin, Mail, MessageSquare, Layers, AlertTriangle } from 'lucide-react'
+import { listFirms, listFirmContacts, DEMO_ACCOUNTS, deleteFirm } from '@/lib/accounts'
+import { listQuotes, QUOTE_STATUS } from '@/lib/quotes'
+import { ChevronDown, ChevronRight, Building2, Users, Mail, Phone, Instagram, Linkedin, Search, ExternalLink, FileText, Upload, Trash2, RefreshCw } from 'lucide-react'
 
-function fmt(n) {
-  if (!n) return '—'
-  return n >= 1e6 ? `$${(n/1e6).toFixed(1)}M` : `$${(n/1e3).toFixed(0)}K`
+function fmtMoney(n) {
+  if (n == null) return '—'
+  return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${(n / 1e3).toFixed(0)}K`
 }
 
-function AccountCard({ acct, open, toggle }) {
-  const tier = PRODUCT_TIERS[acct.tier]
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden mb-3">
-      {/* Header */}
-      <div onClick={toggle} className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-gray-50/50 transition-colors">
-        <div className="flex items-center gap-4">
-          {open ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
-          <div>
-            <div className="font-semibold text-gray-900">{acct.name}</div>
-            <div className="text-xs text-gray-500 flex items-center gap-2 mt-0.5">
-              <span className="capitalize">{acct.type.replace('_', ' ')}</span>
-              <span className="text-gray-300">·</span>
-              <span>{acct.property_count} {acct.property_count === 1 ? 'property' : 'properties'}</span>
-              <span className="text-gray-300">·</span>
-              <span className="font-mono">{fmt(acct.total_known_value)}</span>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Quick action buttons */}
-          <div className="flex items-center gap-1">
-            {acct.research.linkedin && (
-              <a href={acct.research.linkedin} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors" title="LinkedIn">
-                <Linkedin size={14} />
-              </a>
-            )}
-            {acct.research.instagram && (
-              <a href={acct.research.instagram} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-pink-50 text-gray-400 hover:text-pink-600 transition-colors" title="Instagram">
-                <Instagram size={14} />
-              </a>
-            )}
-            {acct.research.likely_email && (
-              <a href={`mailto:${acct.research.likely_email}`} onClick={e => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors" title={acct.research.likely_email}>
-                <Mail size={14} />
-              </a>
-            )}
-            <button onClick={e => { e.stopPropagation(); alert('AI draft coming — connect API key in settings') }} className="p-1.5 rounded-lg hover:bg-amber-50 text-gray-400 hover:text-amber-600 transition-colors" title="AI Draft Outreach">
-              <Send size={14} />
-            </button>
-          </div>
-
-          {/* Product tier badge */}
-          {tier && (
-            <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full ${tier.bg} ${tier.text}`}>
-              {tier.label}
-            </span>
-          )}
-
-          {/* Outreach status */}
-          {acct.outreach_count > 0 ? (
-            <span className="text-[10px] font-medium px-2 py-1 rounded-full bg-green-50 text-green-600">{acct.outreach_count} outreach</span>
-          ) : (
-            <span className="text-[10px] font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-400">No contact</span>
-          )}
-        </div>
-      </div>
-
-      {/* Expanded detail */}
-      {open && (
-        <div className="border-t border-gray-100 px-5 py-5">
-          <div className="grid grid-cols-3 gap-6">
-            {/* Column 1: Entities & Properties */}
-            <div>
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                <Building2 size={12} /> Entities & Properties
-              </div>
-              {acct.entities.map((ent, i) => (
-                <div key={i} className="bg-gray-50 rounded-lg p-3 mb-2">
-                  <div className="text-sm font-medium text-gray-900">{ent.name}</div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {ent.doc && <span className="font-mono text-gray-400">{ent.doc}</span>}
-                    {ent.role && <span> · {ent.role}</span>}
-                  </div>
-                  {ent.property && (
-                    <div className="mt-2 text-xs flex items-center gap-1.5 text-gray-700">
-                      <span className="text-gray-400">→</span>
-                      <span className="font-medium">{ent.property}</span>
-                      {ent.price && <span className="font-mono text-gray-500">{fmt(ent.price)}</span>}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 mt-5 flex items-center gap-1.5">
-                <Layers size={12} /> Known Projects
-              </div>
-              <ul className="space-y-1.5">
-                {acct.known_projects.map((proj, i) => (
-                  <li key={i} className="text-xs text-gray-700 flex items-start gap-1.5">
-                    <span className="text-gray-300 mt-0.5">·</span>
-                    {proj}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* Column 2: Connections */}
-            <div>
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                <Link2 size={12} /> Network / Connections
-              </div>
-              {acct.connections.length > 0 ? (
-                acct.connections.map((conn, i) => (
-                  <div key={i} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-semibold text-gray-500">
-                      {conn.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-gray-900">{conn.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {conn.relationship}
-                        {conn.entity && <span className="text-gray-400"> · {conn.entity}</span>}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-gray-400 italic">No known connections yet</p>
-              )}
-
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 mt-5 flex items-center gap-1.5">
-                <Search size={12} /> Research Links
-              </div>
-              <div className="space-y-2">
-                {acct.research.linkedin && (
-                  <a href={acct.research.linkedin} target="_blank" rel="noopener" className="flex items-center gap-2 text-xs text-blue-600 hover:text-blue-800">
-                    <Linkedin size={12} /> LinkedIn Profile <ExternalLink size={10} />
-                  </a>
-                )}
-                {acct.research.instagram && (
-                  <a href={acct.research.instagram} target="_blank" rel="noopener" className="flex items-center gap-2 text-xs text-pink-600 hover:text-pink-800">
-                    <Instagram size={12} /> Instagram <ExternalLink size={10} />
-                  </a>
-                )}
-                {acct.research.likely_email && (
-                  <div className="flex items-center gap-2 text-xs text-gray-700">
-                    <Mail size={12} /> <span className="font-mono">{acct.research.likely_email}</span>
-                  </div>
-                )}
-                {!acct.research.linkedin && !acct.research.instagram && !acct.research.likely_email && (
-                  <div className="flex items-center gap-2 text-xs text-amber-600">
-                    <AlertTriangle size={12} /> No contact info found — needs deeper research
-                  </div>
-                )}
-                <button className="mt-2 flex items-center gap-1.5 text-xs font-medium text-amber-600 hover:text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg">
-                  <Search size={12} /> Run Deep Research
-                </button>
-              </div>
-            </div>
-
-            {/* Column 3: Notes & Outreach */}
-            <div>
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Intel Notes</div>
-              <p className="text-sm text-gray-700 leading-relaxed">{acct.notes}</p>
-
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 mt-5 flex items-center gap-1.5">
-                <Send size={12} /> Quick Actions
-              </div>
-              <div className="space-y-2">
-                <button className="w-full flex items-center gap-2 text-xs font-medium text-white bg-amber-500 hover:bg-amber-600 px-3 py-2 rounded-lg transition-colors">
-                  <Send size={12} /> AI Draft Outreach Email
-                </button>
-                <button className="w-full flex items-center gap-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-lg transition-colors">
-                  <MessageSquare size={12} /> Log Outreach
-                </button>
-                <button className="w-full flex items-center gap-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-lg transition-colors">
-                  <Search size={12} /> Find LinkedIn / Instagram / Email
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
+function formatDate(s) {
+  if (!s) return ''
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 export default function AccountsPage() {
-  const [search, setSearch] = useState('')
+  const [firms, setFirms] = useState([])
+  const [contactsByFirm, setContactsByFirm] = useState({})
+  const [quotesByFirm, setQuotesByFirm] = useState({})
   const [openId, setOpenId] = useState(null)
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
 
-  const accounts = DEMO_ACCOUNTS.filter(a => {
-    if (!search) return true
-    const s = search.toLowerCase()
-    return a.name.toLowerCase().includes(s) ||
-      a.entities.some(e => e.name.toLowerCase().includes(s)) ||
-      (a.notes || '').toLowerCase().includes(s)
-  })
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [f, allContacts, allQuotes] = await Promise.all([
+        listFirms(),
+        listFirmContacts(),
+        listQuotes(),
+      ])
+      setFirms(f || [])
+      const cMap = {}
+      for (const c of allContacts || []) {
+        if (!cMap[c.firm_id]) cMap[c.firm_id] = []
+        cMap[c.firm_id].push(c)
+      }
+      setContactsByFirm(cMap)
+      const qMap = {}
+      for (const q of allQuotes || []) {
+        if (q.firm_id) {
+          if (!qMap[q.firm_id]) qMap[q.firm_id] = []
+          qMap[q.firm_id].push(q)
+        }
+      }
+      setQuotesByFirm(qMap)
+    } catch (e) {
+      console.warn('Failed to load accounts', e)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-  const totalValue = DEMO_ACCOUNTS.reduce((s, a) => s + a.total_known_value, 0)
-  const totalProperties = DEMO_ACCOUNTS.reduce((s, a) => s + a.property_count, 0)
-  const totalEntities = DEMO_ACCOUNTS.reduce((s, a) => s + a.entities.length, 0)
+  useEffect(() => { refresh() }, [refresh])
+
+  const filtered = useMemo(() => {
+    if (!search) return firms
+    const q = search.toLowerCase()
+    return firms.filter(f => {
+      if (f.name?.toLowerCase().includes(q)) return true
+      if (f.type?.toLowerCase().includes(q)) return true
+      if (f.city?.toLowerCase().includes(q)) return true
+      const contacts = contactsByFirm[f.id] || []
+      if (contacts.some(c => c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q))) return true
+      return false
+    })
+  }, [firms, contactsByFirm, search])
+
+  const stats = useMemo(() => {
+    const totalContacts = Object.values(contactsByFirm).reduce((s, arr) => s + arr.length, 0)
+    const totalQuotes = Object.values(quotesByFirm).reduce((s, arr) => s + arr.length, 0)
+    const totalValue = Object.values(quotesByFirm).reduce((s, arr) => s + arr.reduce((ss, q) => ss + (q.total_value || 0), 0), 0)
+    return {
+      firms: firms.length,
+      contacts: totalContacts,
+      quotes: totalQuotes,
+      value: totalValue,
+    }
+  }, [firms, contactsByFirm, quotesByFirm])
+
+  async function handleDelete(id) {
+    if (!confirm('Delete this firm and all its contacts? Quotes will be unlinked but kept.')) return
+    await deleteFirm(id)
+    await refresh()
+  }
+
+  const showingDemoFallback = !loading && firms.length === 0
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -211,7 +97,18 @@ export default function AccountsPage() {
         <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-lg font-bold text-gray-900">Accounts</h1>
-            <p className="text-xs text-gray-500">Entity networks — see who controls what across LLCs, properties, and connections</p>
+            <p className="text-xs text-gray-500">Firms, contacts, and quote history — seeded from your client list uploads</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={refresh} className="p-2 text-gray-500 hover:text-amber-600 rounded-lg hover:bg-gray-100" title="Refresh">
+              <RefreshCw size={14} />
+            </button>
+            <a
+              href="/settings"
+              className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 bg-amber-500 text-white hover:bg-amber-600"
+            >
+              <Upload size={14} /> Upload Clients CSV
+            </a>
           </div>
         </header>
 
@@ -219,16 +116,13 @@ export default function AccountsPage() {
           {/* Stats */}
           <div className="grid grid-cols-4 gap-4 mb-6">
             {[
-              { l: 'Accounts', v: DEMO_ACCOUNTS.length, icon: Users, c: 'text-gray-900' },
-              { l: 'Total Entities', v: totalEntities, icon: Building2, c: 'text-blue-600' },
-              { l: 'Properties Tracked', v: totalProperties, icon: Layers, c: 'text-amber-600' },
-              { l: 'Known Value', v: fmt(totalValue), icon: DollarSign, c: 'text-green-600' },
+              { l: 'Firms', v: stats.firms, c: 'text-gray-900' },
+              { l: 'Contacts', v: stats.contacts, c: 'text-blue-600' },
+              { l: 'Quotes', v: stats.quotes, c: 'text-purple-600' },
+              { l: 'Quote Value', v: fmtMoney(stats.value), c: 'text-green-600' },
             ].map((s, i) => (
               <div key={i} className="bg-white rounded-lg border border-gray-200 px-4 py-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[11px] text-gray-500 uppercase tracking-wider">{s.l}</span>
-                  <s.icon size={14} className="text-gray-300" />
-                </div>
+                <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1">{s.l}</div>
                 <div className={`text-xl font-bold ${s.c}`}>{s.v}</div>
               </div>
             ))}
@@ -236,25 +130,185 @@ export default function AccountsPage() {
 
           {/* Search */}
           <div className="bg-white rounded-lg border border-gray-200 px-4 py-3 mb-4 flex items-center gap-3">
-            <Search size={16} className="text-gray-400" />
+            <Search size={14} className="text-gray-400" />
             <input
               type="text"
-              placeholder="Search by name, LLC, or keyword..."
+              placeholder="Search firms, contacts, emails, cities..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full text-sm outline-none placeholder:text-gray-300"
+              className="flex-1 text-sm outline-none placeholder:text-gray-300"
             />
+            <span className="text-xs text-gray-400">{filtered.length} results</span>
           </div>
 
-          {/* Account cards */}
-          {accounts.map(acct => (
-            <AccountCard
-              key={acct.id}
-              acct={acct}
-              open={openId === acct.id}
-              toggle={() => setOpenId(openId === acct.id ? null : acct.id)}
-            />
-          ))}
+          {/* Empty / demo state */}
+          {showingDemoFallback && (
+            <div className="bg-white rounded-lg border border-dashed border-gray-300 p-8 text-center mb-6">
+              <Building2 size={32} className="mx-auto text-gray-300 mb-3" />
+              <p className="text-sm font-medium text-gray-700 mb-1">No firms loaded yet</p>
+              <p className="text-xs text-gray-500 mb-4">
+                Upload a client list CSV to seed your accounts. Each unique company becomes a firm, and every row becomes a contact under it.
+              </p>
+              <a
+                href="/settings"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600"
+              >
+                <Upload size={14} /> Go to Data Upload
+              </a>
+              {DEMO_ACCOUNTS?.length > 0 && (
+                <p className="text-[10px] text-gray-400 mt-4 italic">
+                  {DEMO_ACCOUNTS.length} hardcoded demo accounts hidden until you delete them or upload real data
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Firm list */}
+          {!showingDemoFallback && filtered.length === 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+              <p className="text-sm text-gray-500">No firms match your search.</p>
+            </div>
+          )}
+
+          {!showingDemoFallback && filtered.map(firm => {
+            const isOpen = openId === firm.id
+            const contacts = contactsByFirm[firm.id] || []
+            const quotes = quotesByFirm[firm.id] || []
+            const firmValue = quotes.reduce((s, q) => s + (q.total_value || 0), 0)
+            return (
+              <div key={firm.id} className="bg-white rounded-lg border border-gray-200 mb-3 overflow-hidden">
+                <div
+                  onClick={() => setOpenId(isOpen ? null : firm.id)}
+                  className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-gray-50/50 transition-colors"
+                >
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    {isOpen ? <ChevronDown size={16} className="text-gray-400 shrink-0" /> : <ChevronRight size={16} className="text-gray-400 shrink-0" />}
+                    <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+                      <Building2 size={16} className="text-amber-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-gray-900 truncate">{firm.name}</div>
+                      <div className="text-xs text-gray-500 flex items-center gap-2 mt-0.5">
+                        {firm.type && <span className="capitalize">{firm.type}</span>}
+                        {firm.city && <><span className="text-gray-300">·</span><span>{firm.city}{firm.state ? `, ${firm.state}` : ''}</span></>}
+                        <span className="text-gray-300">·</span>
+                        <span>{contacts.length} contact{contacts.length !== 1 ? 's' : ''}</span>
+                        {quotes.length > 0 && (
+                          <>
+                            <span className="text-gray-300">·</span>
+                            <span>{quotes.length} quote{quotes.length !== 1 ? 's' : ''}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {firmValue > 0 && <span className="text-sm font-mono font-semibold text-green-700">{fmtMoney(firmValue)}</span>}
+                    {firm.source === 'upload' && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">upload</span>
+                    )}
+                    <button
+                      onClick={e => { e.stopPropagation(); handleDelete(firm.id) }}
+                      className="text-gray-300 hover:text-red-500"
+                      title="Delete firm"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {isOpen && (
+                  <div className="border-t border-gray-100 bg-gray-50/50 px-5 py-4">
+                    {/* Contacts */}
+                    <div className="mb-4">
+                      <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Users size={11} /> Contacts ({contacts.length})
+                      </div>
+                      {contacts.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">No contacts on file</p>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          {contacts.map(c => (
+                            <div key={c.id} className="bg-white rounded-lg border border-gray-200 p-3">
+                              <div className="text-sm font-semibold text-gray-900">{c.name}</div>
+                              {c.title && <div className="text-[11px] text-gray-500 mb-1">{c.title}</div>}
+                              <div className="space-y-0.5 text-[11px] text-gray-600">
+                                {c.email && (
+                                  <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 hover:text-amber-600 truncate">
+                                    <Mail size={10} /> {c.email}
+                                  </a>
+                                )}
+                                {c.phone && (
+                                  <div className="flex items-center gap-1.5">
+                                    <Phone size={10} /> {c.phone}
+                                  </div>
+                                )}
+                                {c.instagram && (
+                                  <a href={`https://instagram.com/${c.instagram.replace(/^@/, '')}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 hover:text-pink-600">
+                                    <Instagram size={10} /> {c.instagram}
+                                  </a>
+                                )}
+                                {c.linkedin && (
+                                  <a href={c.linkedin} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 hover:text-blue-600 truncate">
+                                    <Linkedin size={10} /> LinkedIn
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Quotes */}
+                    {quotes.length > 0 && (
+                      <div>
+                        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                          <FileText size={11} /> Quotes ({quotes.length})
+                        </div>
+                        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                          <table className="w-full text-xs">
+                            <thead className="bg-gray-50 border-b border-gray-200">
+                              <tr className="text-[10px] font-semibold text-gray-500 uppercase">
+                                <th className="py-1.5 px-3 text-left">Quote #</th>
+                                <th className="py-1.5 px-3 text-left">Date</th>
+                                <th className="py-1.5 px-3 text-left">Project</th>
+                                <th className="py-1.5 px-3 text-left">Status</th>
+                                <th className="py-1.5 px-3 text-right">Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {quotes.map(q => {
+                                const st = QUOTE_STATUS[q.status] || QUOTE_STATUS.unknown
+                                return (
+                                  <tr key={q.id} className="border-b border-gray-100 last:border-0">
+                                    <td className="py-1.5 px-3 font-mono text-gray-700">{q.quote_number || '—'}</td>
+                                    <td className="py-1.5 px-3 text-gray-600">{formatDate(q.quote_date)}</td>
+                                    <td className="py-1.5 px-3 text-gray-700 truncate max-w-48">{q.project_name || q.address || '—'}</td>
+                                    <td className="py-1.5 px-3">
+                                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${st.bg} ${st.color}`}>{st.label}</span>
+                                    </td>
+                                    <td className="py-1.5 px-3 text-right font-mono text-gray-700">{fmtMoney(q.total_value)}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {firm.notes && (
+                      <div className="mt-4">
+                        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Notes</div>
+                        <p className="text-xs text-gray-600 leading-relaxed">{firm.notes}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       </main>
     </div>

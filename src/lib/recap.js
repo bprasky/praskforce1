@@ -25,58 +25,61 @@ export const DEAL_STAGES = {
   stalled: { label: 'Stalled', desc: 'No recent movement — needs re-engagement' },
 }
 
-function buildRecapPrompt({ notes, contact, property, senderName }) {
-  return `You are a sales operations assistant for a natural stone importer (ARCA Worldwide). Your job is to read meeting notes from a client conversation and draft a perfectly-toned follow-up email.
+// Default recap prompt — informative and factual, NOT bubbly.
+// Users can override this by setting config.ai.recap_prompt_template in
+// Settings → AI & Outreach. Placeholders: {{notes}}, {{contact}},
+// {{property}}, {{senderName}}. The JSON output contract is appended
+// automatically regardless of the template so downstream parsing works.
+export const DEFAULT_RECAP_PROMPT = `You are a sales operations assistant for a natural stone importer (ARCA Worldwide). Draft a follow-up email after a client meeting.
 
-SENDER: ${senderName || 'the ARCA representative'}
-CONTACT: ${contact || 'unspecified'}
-PROPERTY / PROJECT: ${property || 'unspecified'}
+SENDER: {{senderName}}
+CONTACT: {{contact}}
+PROPERTY / PROJECT: {{property}}
 
 MEETING NOTES:
-${notes}
+{{notes}}
 
-Your task:
-1. Evaluate where this deal sits in the sales cycle. Pick ONE stage:
-   - initial_contact: first touch, discovery mode
-   - needs_assessment: understanding project, materials, budget
-   - proposal: quote sent, awaiting feedback
-   - negotiation: active back-and-forth on terms or selection
-   - closing: final decision in sight
-   - post_sale: delivered — nurturing for next project
-   - stalled: no recent movement — needs re-engagement
+STYLE REQUIREMENTS — READ CAREFULLY:
+- Informative and factual. NOT bubbly, NOT complimentary, NOT effusive.
+- No "It was great to connect" / "Thanks for the wonderful meeting" / "Loved hearing about your project".
+- No pleasantries, no flattery, no exclamation points unless the client used one first.
+- Treat the reader as a busy professional who wants the information and the next step, nothing else.
+- Short sentences. Concrete nouns. Specific numbers, materials, and dates from the notes.
+- Match the formality of how the client communicates — if the notes suggest casual texting, be casual. If they suggest board-room formal, be formal. Default to clipped and professional.
 
-2. Give a rough completion percent (0-100) — how close this deal feels to closed based on the notes.
+YOUR TASK:
+1. Classify the deal stage. Pick exactly one: initial_contact | needs_assessment | proposal | negotiation | closing | post_sale | stalled
+2. Give a rough completion percent (0-100).
+3. Pick a tone descriptor that reflects the above style requirements (e.g. "Clipped and factual", "Direct and technical", "Formal but brief"). Do NOT pick warm/enthusiastic/celebratory tones unless the notes clearly warrant them.
+4. Draft a follow-up email:
+   - Subject: specific to the project, no "Following up" / "Touching base"
+   - Body: 2-5 short paragraphs, plain text. Lead with the most useful fact (what you committed to send, what you learned about their specs, what decision is pending). Reference concrete details from the notes. End with a single clear ask or next step.
+   - Sign off "{{senderName}}"
+5. List 1-4 concrete offline next actions for the sender.
+6. Briefly explain your stage and tone choice.
 
-3. Decide the appropriate TONE. Read the room from the notes. Examples of tones that might fit:
-   - "Warm and educational" — early stage, relationship-building
-   - "Concise and professional" — busy decision-maker
-   - "Enthusiastic but not pushy" — product interest established
-   - "Reassuring and patient" — concerns or hesitations raised
-   - "Direct and action-oriented" — ready to close, needs a nudge
-   - "Celebratory and forward-looking" — deal won, looking ahead
-   Use your judgment. Don't reuse the same tone across every recap.
-
-4. Draft a follow-up email matched to that tone:
-   - Subject line: specific, not generic ("Re: Pine Tree marble options" not "Following up")
-   - Body: plain text, 3-6 short paragraphs, natural voice, no corporate filler
-   - Reference specific things from the notes (materials discussed, concerns raised, next steps agreed)
-   - End with a clear single ask or next step
-   - Sign off as "${senderName || 'ARCA Worldwide'}"
-
-5. List 1-4 concrete next actions the sender should take offline (e.g. "Pull 3ft samples of Calacatta Borghini", "Check inventory on Taj Mahal quartzite slabs 2cm").
-
-6. Briefly explain your reasoning for the stage + tone decision so the sender can sanity-check your read.
-
-Respond with ONLY a JSON object (no markdown, no prose before or after) with this exact shape:
+OUTPUT FORMAT (strict — no markdown, no prose, just the JSON object):
 {
   "stage": "needs_assessment",
   "completion_percent": 35,
-  "tone": "Warm and educational",
+  "tone": "Clipped and factual",
   "subject": "...",
   "body": "...",
   "next_actions": ["...", "..."],
   "reasoning": "..."
 }`
+
+function applyTemplate(template, vars) {
+  return template
+    .replace(/\{\{notes\}\}/g, vars.notes || '')
+    .replace(/\{\{contact\}\}/g, vars.contact || 'unspecified')
+    .replace(/\{\{property\}\}/g, vars.property || 'unspecified')
+    .replace(/\{\{senderName\}\}/g, vars.senderName || 'ARCA Worldwide')
+}
+
+function buildRecapPrompt({ notes, contact, property, senderName, templateOverride }) {
+  const template = (templateOverride && templateOverride.trim()) || DEFAULT_RECAP_PROMPT
+  return applyTemplate(template, { notes, contact, property, senderName })
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -103,6 +106,7 @@ export async function draftRecap({ notes, contact, property }) {
     contact,
     property,
     senderName: config.user?.name || config.notifications?.email?.split('@')[0] || '',
+    templateOverride: config.ai?.recap_prompt_template || '',
   })
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {

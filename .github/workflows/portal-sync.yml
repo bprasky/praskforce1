@@ -1,0 +1,54 @@
+name: Portal Sync
+
+# Runs the background job runner on a schedule and on manual dispatch.
+# The runner polls agent_jobs in Supabase and processes portal scans,
+# IG rundowns, and other queued work.
+#
+# Before this workflow does anything useful, you need to:
+#   1. Connect Supabase and run the schema (see supabase/schema.sql).
+#   2. Add two repo secrets under Settings → Secrets and variables → Actions:
+#        NEXT_PUBLIC_SUPABASE_URL   (your Supabase project URL)
+#        SUPABASE_SERVICE_ROLE_KEY  (service role key, bypasses RLS)
+#   3. Ship real scrapers for at least one portal — see scripts/runner.js
+#      TODO blocks. Until then this workflow runs the stub handlers,
+#      marks queued jobs as "done" with dry-run results, and is mostly
+#      useful for verifying the plumbing works end to end.
+
+on:
+  schedule:
+    # Every hour on the top of the hour. Adjust as needed — for the
+    # "ping me every morning" goal you can restrict to e.g. 0 12 * * *
+    # (8am ET daily, since GitHub Actions uses UTC).
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: 'Job kind to process (leave blank for all)'
+        required: false
+        default: ''
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run the job runner
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.kind }}" ]; then
+            node scripts/runner.js --kind "${{ github.event.inputs.kind }}"
+          else
+            node scripts/runner.js
+          fi
