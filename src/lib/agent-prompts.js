@@ -278,6 +278,138 @@ IMPORTANT:
 - Keep the output concise. Captions over 500 chars should be truncated with "…".
 
 BEGIN — navigate to instagram.com.`
+    },
+
+    'SCAN-ALL-PORTALS-001': () => {
+      // context.portals is an array of enabled portals from config.portals
+      // context.filters is the scan filters from config.filters
+      // context.targetAddresses is an optional array of property addresses
+      //   to focus the scan on (defaults to the current pipeline list)
+      const portals = context.portals || []
+      const filters = context.filters || {}
+      const targets = context.targetAddresses || []
+
+      if (portals.length === 0) {
+        return `No portals enabled. Enable portals in Configuration → Portals first.`
+      }
+
+      const priceFloor = filters.price_floor ? `$${(filters.price_floor / 1_000_000).toFixed(1)}M` : 'none'
+      const priceCeiling = filters.price_ceiling ? `$${(filters.price_ceiling / 1_000_000).toFixed(1)}M` : 'none'
+      const zips = (filters.zip_codes || []).join(', ') || '(any)'
+      const neighborhoods = (filters.neighborhoods || []).join(', ') || '(any)'
+      const lookbackDays = filters.days_lookback || 90
+
+      const portalList = portals.map(p => {
+        const auth = p.login_required
+          ? (p.credential_key
+              ? `REQUIRES LOGIN — use 1Password item "${p.credential_key}"`
+              : `REQUIRES LOGIN — NO CREDENTIAL CONFIGURED — MARK AS FAILED with error "Missing credential key"`)
+          : 'public (no login)'
+        return `  - id: ${p.id}
+    name: ${p.name}
+    url: ${p.url}
+    municipality: ${p.municipality || '(n/a)'}
+    auth: ${auth}`
+      }).join('\n')
+
+      return `You are an automation agent working for Brad Prasky at ARCA Worldwide.
+
+TASK: Scan all enabled permit portals for new building permits. Return a strict, structured report. THIS IS IMPORTANT: you must report a status for EVERY portal below, even if it fails or is skipped. Silent failures are not acceptable.
+
+═══════════════════════════════════════════════════════════════════
+SCAN FILTERS (only surface permits matching these criteria)
+═══════════════════════════════════════════════════════════════════
+- Price floor: ${priceFloor}
+- Price ceiling: ${priceCeiling}
+- Target zip codes: ${zips}
+- Target neighborhoods: ${neighborhoods}
+- Lookback window: last ${lookbackDays} days
+- Property types: ${(filters.property_types || []).join(', ') || 'any'}
+
+═══════════════════════════════════════════════════════════════════
+PORTALS TO SCAN (${portals.length})
+═══════════════════════════════════════════════════════════════════
+${portalList}
+
+${targets.length > 0 ? `═══════════════════════════════════════════════════════════════════
+PRIORITY ADDRESSES (check these first on each portal)
+═══════════════════════════════════════════════════════════════════
+${targets.map(a => `  - ${a}`).join('\n')}
+
+` : ''}═══════════════════════════════════════════════════════════════════
+PROCEDURE — FOR EACH PORTAL ABOVE
+═══════════════════════════════════════════════════════════════════
+1. Open the portal URL in a new tab.
+2. If it requires login, pull credentials from 1Password using the exact item name specified. If login fails after 2 attempts, STOP on that portal and mark it failed — do not get stuck.
+3. Search for permits issued/filed in the last ${lookbackDays} days matching the filters above.
+4. For each matching permit, capture:
+   - portal_id (match the id from the list above)
+   - permit_number
+   - address
+   - permit_type
+   - permit_status (applied / issued / in_review / finaled / etc.)
+   - date_filed
+   - date_issued (if applicable)
+   - valuation
+   - scope_description
+   - contractor_name
+   - applicant_name
+   - raw_link (URL to the permit detail page if available)
+5. Move to the next portal. Do not spend more than ~5 minutes per portal — if it's slow or unresponsive, report it as "partial" or "failed" and move on.
+
+═══════════════════════════════════════════════════════════════════
+OUTPUT FORMAT (strict — paste back into PraskForce1)
+═══════════════════════════════════════════════════════════════════
+Return a single JSON object, no markdown fences, no prose before or after. Shape:
+
+{
+  "portal_results": [
+    {
+      "portal_id": "mb_civic",
+      "portal_name": "Miami Beach Civic Access",
+      "status": "success",
+      "permits_found": 14,
+      "new_permits": 3,
+      "error": null,
+      "summary": "Searched 14 matching permits, 3 new since last scan"
+    },
+    {
+      "portal_id": "miami_ibuild",
+      "portal_name": "City of Miami iBuild",
+      "status": "failed",
+      "permits_found": 0,
+      "new_permits": 0,
+      "error": "Login timed out after 2 attempts — MFA prompt blocked",
+      "summary": null
+    }
+    // ... one entry for EVERY portal in the list above, no exceptions
+  ],
+  "permits": [
+    {
+      "portal_id": "mb_civic",
+      "permit_number": "BR2501234",
+      "address": "5681 Pine Tree Dr",
+      "permit_type": "Alterations",
+      "permit_status": "Applied",
+      "date_filed": "2026-04-05",
+      "date_issued": null,
+      "valuation": 1350000,
+      "scope_description": "Interior remodel, full gut",
+      "contractor_name": "GOLDEN HAMMER CONSTRUCTION",
+      "applicant_name": "Jared Galbut",
+      "raw_link": "https://eservices.miamibeachfl.gov/permits/BR2501234"
+    }
+    // ... etc
+  ]
+}
+
+CRITICAL RULES:
+- Every portal in the list above MUST appear in portal_results. If you couldn't scan it, set status to "failed" or "skipped" and put the reason in the "error" field. Empty reports are unacceptable.
+- status must be one of: "success" | "partial" | "failed" | "skipped"
+- If a portal has structural issues (site redesign, new login flow), mark it "partial" or "failed" with a specific error message — do not guess at data.
+- Do not invent permits. If a portal returns no results matching the filters, report permits_found: 0 and status: "success".
+
+BEGIN — start with the first portal in the list.`
     }
   }
 

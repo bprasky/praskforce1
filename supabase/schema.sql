@@ -104,15 +104,26 @@ create table lead_scores (
   scored_at timestamptz default now()
 );
 
+-- scan_log: one row per portal scan attempt. status + error_details
+-- are required for "no silent failures" — any scan that fails (login
+-- timeout, captcha, structure change) must be recorded so the UI can
+-- surface it loudly instead of looking like "nothing happened".
 create table scan_log (
   id uuid primary key default gen_random_uuid(),
   property_id uuid references properties(id) on delete cascade,
-  portal text,
-  scan_type text,
+  portal text,                 -- human-readable portal name
+  portal_id text,              -- stable id matching config.portals[].id
+  scan_type text,              -- 'portal_scan' | 'property_lookup' | etc.
+  status text default 'success', -- 'success' | 'partial' | 'failed' | 'skipped'
   result_summary text,
+  error_details text,
+  permits_found integer default 0,
+  new_permits integer default 0,
   found_new_data boolean default false,
   scanned_at timestamptz default now()
 );
+create index idx_scan_log_portal on scan_log(portal_id, scanned_at desc);
+create index idx_scan_log_status on scan_log(status);
 
 create table tasks (
   id uuid primary key default gen_random_uuid(),

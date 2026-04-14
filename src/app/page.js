@@ -3,6 +3,7 @@ import { useState, useMemo } from 'react'
 import { DEMO_PROPERTIES } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import SocialSignalsSection from '@/components/SocialSignalsSection'
+import PortalScansSection from '@/components/PortalScansSection'
 import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock } from 'lucide-react'
 
 const PRI = {
@@ -181,6 +182,11 @@ export default function Dashboard() {
               <option value="active">Active</option>
             </select>
             <div className="text-xs text-gray-400">{filtered.length} results</div>
+          </div>
+
+          {/* Portal scan status */}
+          <div className="mb-6">
+            <PortalScansSection />
           </div>
 
           {/* Permit activity table */}
