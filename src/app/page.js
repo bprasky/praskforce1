@@ -4,6 +4,7 @@ import { DEMO_PROPERTIES } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import SocialSignalsSection from '@/components/SocialSignalsSection'
 import PortalScansSection from '@/components/PortalScansSection'
+import RecentPermitsSection from '@/components/RecentPermitsSection'
 import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock } from 'lucide-react'
 
 const PRI = {
@@ -189,10 +190,14 @@ export default function Dashboard() {
             <PortalScansSection />
           </div>
 
-          {/* Permit activity table */}
+          {/* Live permits from portal scans */}
+          <RecentPermitsSection />
+
+          {/* Target properties (curated pipeline — demo data for now) */}
           <div className="flex items-center gap-2 mb-2 mt-2">
-            <FileText size={14} className="text-gray-400" />
-            <h2 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Permit Activity</h2>
+            <Building2 size={14} className="text-gray-400" />
+            <h2 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Target Properties</h2>
+            <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 font-medium">Demo Data</span>
           </div>
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             <table className="w-full">

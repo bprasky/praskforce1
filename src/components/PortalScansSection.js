@@ -314,6 +314,11 @@ export default function PortalScansSection() {
                     {ingestResult.succeeded} succeeded · {ingestResult.partial} partial · <strong>{ingestResult.failed} failed</strong>
                     {ingestResult.missing > 0 && <> · <strong>{ingestResult.missing} silently skipped by agent (now recorded as failed)</strong></>}
                   </div>
+                  {(ingestResult.permits_inserted > 0 || ingestResult.permits_updated > 0) && (
+                    <div className="mt-0.5">
+                      → {ingestResult.permits_inserted} new permits, {ingestResult.permits_updated} updated in permits table
+                    </div>
+                  )}
                 </div>
               )}
               <div className="flex items-center gap-2 mt-3">

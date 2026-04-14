@@ -14,6 +14,7 @@
 // Supabase-first, localStorage fallback, same pattern as the other libs.
 
 import { getSupabase } from '@/lib/supabase'
+import { upsertPermits } from '@/lib/permits'
 
 const LS_KEY = 'pf1_scan_log'
 
@@ -215,5 +216,28 @@ export async function ingestScanResults(parsed, requestedPortals) {
   const partial = saved.filter(r => r.status === 'partial').length
   const missing = saved.filter(r => r.error_details?.includes('did not report')).length
 
-  return { rows: saved, succeeded, failed, partial, missing, total: saved.length }
+  // Also write the actual permit records the agent returned into the
+  // permits table. We don't fail the scan ingestion if this step errors
+  // — the scan_log entries are already saved and are the source of
+  // truth for "did the scan run?".
+  let permitsIngested = { inserted: 0, updated: 0 }
+  try {
+    const rawPermits = Array.isArray(parsed.permits) ? parsed.permits : []
+    if (rawPermits.length > 0) {
+      permitsIngested = await upsertPermits(rawPermits)
+    }
+  } catch (e) {
+    console.warn('Failed to upsert permits from scan results:', e)
+  }
+
+  return {
+    rows: saved,
+    succeeded,
+    failed,
+    partial,
+    missing,
+    total: saved.length,
+    permits_inserted: permitsIngested.inserted,
+    permits_updated: permitsIngested.updated,
+  }
 }
