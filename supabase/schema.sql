@@ -193,6 +193,33 @@ create table agent_jobs (
 create index idx_agent_jobs_status on agent_jobs(status, priority, created_at);
 create index idx_agent_jobs_kind on agent_jobs(kind);
 
+-- Social signals surfaced by the IG daily scroll (or future other
+-- social sources). One row per detected post/activity with a
+-- relevance score from the cross-reference logic.
+--
+-- match_type: 'handle' | 'name' | 'email' | 'project' | 'none'
+-- status: 'new' | 'reviewed' | 'converted_to_lead' | 'dismissed'
+create table social_signals (
+  id uuid primary key default gen_random_uuid(),
+  source text not null default 'instagram',       -- instagram | linkedin | facebook | other
+  handle text,                                      -- @username where applicable
+  post_url text,
+  post_date timestamptz,
+  caption text,
+  image_url text,
+  matched_client text,                              -- client row identifier from uploads
+  matched_field text,                               -- which field matched (handle, name, email)
+  match_type text,
+  relevance_score integer default 0,                -- 0-100
+  status text default 'new',
+  notes text,
+  raw_data jsonb,
+  created_at timestamptz default now(),
+  reviewed_at timestamptz
+);
+create index idx_social_signals_status on social_signals(status, created_at desc);
+create index idx_social_signals_source on social_signals(source);
+
 -- Indexes
 create index idx_properties_priority on properties(priority);
 create index idx_properties_status on properties(status);

@@ -204,7 +204,81 @@ Output a summary report with:
 3. Quote ↔ pipeline property matches
 4. Recommended actions (follow-ups, new outreach, quote updates)
 
-BEGIN — start with StoneProfits login.`
+BEGIN — start with StoneProfits login.`,
+
+    'IG-DAILY-001': () => {
+      // context.watchlist is an array of rows from a kind=instagram_watchlist
+      // upload. Each row has a handle and optional notes. We inline it here
+      // (small — hundreds of handles max) rather than making the browser
+      // agent query Supabase.
+      const watchlist = context.watchlist || []
+      if (watchlist.length === 0) {
+        return `No Instagram watchlist found. Upload a CSV with kind "Instagram Watchlist" in Configuration → Data Upload first. The CSV should have at minimum a "handle" column — optionally also "client_name" and "notes".`
+      }
+
+      const handleKey = Object.keys(watchlist[0]).find(k => k.toLowerCase().includes('handle')) || Object.keys(watchlist[0])[0]
+      const noteKey = Object.keys(watchlist[0]).find(k => k.toLowerCase().includes('note')) || null
+      const clientKey = Object.keys(watchlist[0]).find(k => k.toLowerCase().includes('client') || k.toLowerCase().includes('name')) || null
+
+      const lastRun = context.lastRun || '(first run — report everything from the last 48 hours)'
+
+      return `You are an automation agent working for Brad Prasky at ARCA Worldwide.
+
+TASK: Daily Instagram rundown — scroll each handle below and capture new activity.
+
+LAST RUN: ${lastRun}
+
+Brad does not want to spend an hour scrolling Instagram every morning. Your job is to be his eyes. Visit each handle in the watchlist, scan recent posts, and return structured data about what's new. He will then cross-reference against his client list automatically.
+
+WATCHLIST (${watchlist.length} handles):
+${watchlist.map(row => {
+  const h = row[handleKey]
+  const c = clientKey ? row[clientKey] : null
+  const n = noteKey ? row[noteKey] : null
+  const bits = [h]
+  if (c) bits.push(`— ${c}`)
+  if (n) bits.push(`(${n})`)
+  return `  - ${bits.join(' ')}`
+}).join('\n')}
+
+STEPS:
+1. Open instagram.com. If not already logged in, use credentials labeled "Instagram" from 1Password.
+2. For EACH handle in the watchlist above:
+   a. Navigate to instagram.com/<handle>
+   b. Look at the most recent posts (visible in the grid without clicking into any single post if possible)
+   c. Identify any posts that appear to be from the last ${context.lookbackDays || 7} days
+   d. For each recent post, capture:
+      - handle (the account, not the tagged accounts)
+      - post_url (the permalink — right-click → copy link OR read from URL after clicking)
+      - post_date (ISO format if possible, otherwise "Xd ago")
+      - caption (first 500 characters is fine — Brad will read the rest if it matches)
+      - image_url (the main image URL if you can grab it, else leave null)
+   e. Move to the next handle. DO NOT follow or interact with anything.
+3. If a handle has NOTHING new since the last run, skip it entirely — don't emit a row.
+
+OUTPUT:
+Return a single JSON array. No prose, no markdown fencing. Just the array. Example shape:
+
+[
+  {
+    "handle": "@studiogalliani",
+    "post_url": "https://instagram.com/p/ABC123",
+    "post_date": "2026-04-12",
+    "caption": "Installation day at our Pine Tree project — Calacatta Gold the whole way through…",
+    "image_url": "https://scontent.cdninstagram.com/..."
+  }
+]
+
+After you output the JSON, Brad will paste it back into PraskForce1 and it will be automatically cross-referenced against his client list. Anything that matches a known client becomes a lead to follow up on.
+
+IMPORTANT:
+- Do not like, comment on, or save any posts.
+- Do not follow new accounts.
+- If you get rate-limited or hit a login wall, stop and report which handles you covered vs. didn't in a final JSON object: {"completed": ["..."], "blocked_on": "..."}.
+- Keep the output concise. Captions over 500 chars should be truncated with "…".
+
+BEGIN — navigate to instagram.com.`
+    }
   }
 
   const generator = prompts[taskId]
