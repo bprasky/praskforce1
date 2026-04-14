@@ -8,7 +8,7 @@
     "start": "next start",
     "runner": "node scripts/runner.js",
     "runner:daemon": "node scripts/runner.js --daemon",
-    "postinstall": "playwright install chromium || echo 'Skipping playwright install (set PF1_SKIP_PLAYWRIGHT=1 to silence)'"
+    "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
     "next": "^15.0.0",
