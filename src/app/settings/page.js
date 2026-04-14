@@ -4,6 +4,7 @@ import Sidebar from '@/components/Sidebar'
 import CredentialsTab from '@/components/CredentialsTab'
 import AgentInstructionsTab from '@/components/AgentInstructionsTab'
 import DataUploadTab from '@/components/DataUploadTab'
+import { DEFAULT_RECAP_PROMPT } from '@/lib/recap'
 import { getConfig, saveConfig, resetConfig, DEFAULT_CONFIG } from '@/lib/config'
 import { Globe, SlidersHorizontal, ShieldCheck, Database, Bell, RotateCcw, Plus, Trash2, Check, ExternalLink, ToggleLeft, ToggleRight, Save, AlertTriangle, Bot, BookOpen, Cloud, Upload } from 'lucide-react'
 
@@ -439,6 +440,39 @@ function AIOutreachTab({ config, setConfig }) {
             placeholder="Describe your company, products, and differentiators..."
           />
         </label>
+      </Section>
+
+      <Section
+        title="Recap Drafting Prompt"
+        desc="The prompt Claude uses when drafting meeting recap emails. Edit it if the tone isn't right. Supports placeholders: {{notes}}, {{contact}}, {{property}}, {{senderName}}. Leave blank to use the default (informative and factual, not bubbly)."
+      >
+        <label className="block mb-2">
+          <span className="text-xs font-medium text-gray-600">Custom prompt (blank = use default)</span>
+          <textarea
+            value={ai.recap_prompt_template || ''}
+            onChange={e => setAI('recap_prompt_template', e.target.value)}
+            rows={14}
+            className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:border-amber-400 leading-relaxed"
+            placeholder="Leave blank to use the built-in default, or paste your own prompt template here."
+          />
+        </label>
+        <div className="flex items-center gap-2 mb-3">
+          <button
+            onClick={() => setAI('recap_prompt_template', DEFAULT_RECAP_PROMPT)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50"
+          >
+            Load Default into Editor
+          </button>
+          <button
+            onClick={() => setAI('recap_prompt_template', '')}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-red-600"
+          >
+            Clear (use default)
+          </button>
+          <span className="text-[10px] text-gray-400 ml-auto">
+            {(ai.recap_prompt_template || '').length} chars · ~{Math.ceil((ai.recap_prompt_template || DEFAULT_RECAP_PROMPT).length / 4)} tokens
+          </span>
+        </div>
       </Section>
     </>
   )

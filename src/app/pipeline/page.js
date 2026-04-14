@@ -5,10 +5,11 @@ import Sidebar from '@/components/Sidebar'
 import { getMeetings, getTasks, updateTask, TASK_TYPES, TASK_STATUS } from '@/lib/tasks'
 import { listJobs, updateJob, createJob, JOB_STATUS } from '@/lib/agent-jobs'
 import { draftRecap, DEAL_STAGES } from '@/lib/recap'
+import { listQuotes, updateQuote, QUOTE_STATUS } from '@/lib/quotes'
 import {
   Briefcase, FileText, Send, ExternalLink, Plus, CheckCircle, Play,
   Clock, User, MapPin, Zap, RefreshCw, Copy, AlertTriangle, Sparkles,
-  ChevronDown, ChevronRight
+  ChevronDown, ChevronRight, Link2, Search
 } from 'lucide-react'
 
 function formatDate(iso) {
@@ -44,15 +45,20 @@ export default function PipelinePage() {
   const [meetings, setMeetings] = useState([])
   const [tasks, setTasks] = useState([])
   const [jobs, setJobs] = useState([])
+  const [quotes, setQuotes] = useState([])
   const [expanded, setExpanded] = useState({})  // { [meetingId]: true }
   const [redrafting, setRedrafting] = useState({}) // { [jobId]: true }
   const [copied, setCopied] = useState(null) // jobId
+  const [quotesOpen, setQuotesOpen] = useState(true)
+  const [quotesSearch, setQuotesSearch] = useState('')
+  const [quotesStatusFilter, setQuotesStatusFilter] = useState('all')
 
   const refresh = useCallback(async () => {
     setMeetings(getMeetings())
     setTasks(getTasks())
-    const j = await listJobs()
+    const [j, q] = await Promise.all([listJobs(), listQuotes()])
     setJobs(j)
+    setQuotes(q || [])
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -459,6 +465,117 @@ export default function PipelinePage() {
               })}
             </div>
           )}
+
+          {/* ── Quotes browser ───────────────────────────────────── */}
+          {(() => {
+            const filtered = quotes.filter(q => {
+              if (quotesStatusFilter !== 'all' && q.status !== quotesStatusFilter) return false
+              if (quotesSearch) {
+                const s = quotesSearch.toLowerCase()
+                const hay = [q.quote_number, q.customer_name, q.contact_name, q.project_name, q.address, q.materials].join(' ').toLowerCase()
+                if (!hay.includes(s)) return false
+              }
+              return true
+            })
+            const totalValue = filtered.reduce((s, q) => s + (q.total_value || 0), 0)
+            const fmtMoney = n => (n == null ? '—' : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${(n / 1e3).toFixed(0)}K`)
+            const fmtDate = s => {
+              if (!s) return '—'
+              const d = new Date(s)
+              return Number.isNaN(d.getTime()) ? s : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
+            }
+            return (
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-2">
+                  <button
+                    onClick={() => setQuotesOpen(!quotesOpen)}
+                    className="flex items-center gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wider hover:text-gray-900"
+                  >
+                    {quotesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    <FileText size={14} className="text-gray-400" />
+                    Quotes <span className="text-[10px] text-gray-400 font-normal normal-case">({quotes.length} total · {fmtMoney(totalValue)} filtered)</span>
+                  </button>
+                  {quotes.length === 0 && (
+                    <a href="/settings" className="text-[11px] text-amber-600 hover:underline">Upload quotes CSV →</a>
+                  )}
+                </div>
+
+                {quotesOpen && (
+                  quotes.length === 0 ? (
+                    <div className="bg-white rounded-lg border border-dashed border-gray-300 p-6 text-center">
+                      <FileText size={20} className="mx-auto text-gray-300 mb-2" />
+                      <p className="text-xs text-gray-500 mb-1">No quotes loaded</p>
+                      <p className="text-[11px] text-gray-400">Upload a StoneProfits quote export on the Data Upload tab to seed this list.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="bg-white rounded-lg border border-gray-200 px-3 py-2 mb-2 flex items-center gap-3">
+                        <Search size={12} className="text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="Search quote #, customer, project, materials..."
+                          value={quotesSearch}
+                          onChange={e => setQuotesSearch(e.target.value)}
+                          className="flex-1 text-xs outline-none placeholder:text-gray-300"
+                        />
+                        <select
+                          value={quotesStatusFilter}
+                          onChange={e => setQuotesStatusFilter(e.target.value)}
+                          className="text-[11px] border border-gray-200 rounded px-2 py-1 outline-none bg-white"
+                        >
+                          <option value="all">All statuses</option>
+                          {Object.entries(QUOTE_STATUS).map(([k, v]) => (
+                            <option key={k} value={k}>{v.label}</option>
+                          ))}
+                        </select>
+                        <span className="text-[10px] text-gray-400">{filtered.length} shown</span>
+                      </div>
+
+                      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr className="text-[10px] font-semibold text-gray-500 uppercase">
+                              <th className="py-2 px-3 text-left">Quote #</th>
+                              <th className="py-2 px-3 text-left">Date</th>
+                              <th className="py-2 px-3 text-left">Customer</th>
+                              <th className="py-2 px-3 text-left">Project</th>
+                              <th className="py-2 px-3 text-left">Materials</th>
+                              <th className="py-2 px-3 text-right">Value</th>
+                              <th className="py-2 px-3 text-left">Status</th>
+                              <th className="py-2 px-3 text-left">Linked</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.map(q => {
+                              const st = QUOTE_STATUS[q.status] || QUOTE_STATUS.unknown
+                              return (
+                                <tr key={q.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
+                                  <td className="py-2 px-3 font-mono text-gray-700">{q.quote_number || '—'}</td>
+                                  <td className="py-2 px-3 text-gray-500">{fmtDate(q.quote_date)}</td>
+                                  <td className="py-2 px-3 text-gray-800 truncate max-w-40">{q.customer_name || '—'}</td>
+                                  <td className="py-2 px-3 text-gray-600 truncate max-w-40">{q.project_name || q.address || '—'}</td>
+                                  <td className="py-2 px-3 text-gray-500 truncate max-w-48">{q.materials || '—'}</td>
+                                  <td className="py-2 px-3 text-right font-mono text-gray-700">{fmtMoney(q.total_value)}</td>
+                                  <td className="py-2 px-3">
+                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${st.bg} ${st.color}`}>{st.label}</span>
+                                  </td>
+                                  <td className="py-2 px-3 text-[10px] text-gray-500">
+                                    {q.firm_id && <span className="inline-flex items-center gap-1 text-indigo-600" title="Linked to firm"><Link2 size={9} /> firm</span>}
+                                    {q.meeting_id && <span className="inline-flex items-center gap-1 ml-1 text-amber-600" title="Linked to meeting"><Link2 size={9} /> meeting</span>}
+                                    {!q.firm_id && !q.meeting_id && <span className="text-gray-400">—</span>}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )
+                )}
+              </div>
+            )
+          })()}
         </div>
       </main>
     </div>

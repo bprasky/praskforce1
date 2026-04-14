@@ -150,22 +150,46 @@ export async function createUpload({ name, kind, description, headers, rows }) {
   }
 
   const sb = getSupabase()
+  let persisted
   if (sb) {
     try {
       const { error: upErr } = await sb.from('uploads').insert({ ...record, rows })
       if (upErr) throw upErr
-      return record
+      persisted = record
     } catch (e) {
       console.warn('Supabase createUpload failed, falling back to localStorage', e)
     }
   }
 
-  // localStorage fallback
-  const list = lsGetIndex()
-  list.unshift(record)
-  lsSetIndex(list)
-  lsSetRows(id, rows)
-  return record
+  if (!persisted) {
+    // localStorage fallback
+    const list = lsGetIndex()
+    list.unshift(record)
+    lsSetIndex(list)
+    lsSetRows(id, rows)
+    persisted = record
+  }
+
+  // Seed downstream entities based on the upload kind. We attach the
+  // seed counts to the returned record so the UI can report them.
+  // Dynamic imports avoid a circular dependency between uploads,
+  // accounts, and quotes libs.
+  try {
+    if (kind === 'clients') {
+      const { seedFirmsFromClientRows } = await import('@/lib/accounts')
+      const seedResult = await seedFirmsFromClientRows(rows, persisted)
+      persisted.seed_result = { kind: 'clients', ...seedResult }
+    } else if (kind === 'quotes') {
+      const { seedQuotesFromRows } = await import('@/lib/quotes')
+      const seedResult = await seedQuotesFromRows(rows, persisted)
+      persisted.seed_result = { kind: 'quotes', ...seedResult }
+    }
+  } catch (e) {
+    console.warn('Upload seeding failed:', e)
+    persisted.seed_error = e.message
+  }
+
+  return persisted
 }
 
 export async function deleteUpload(id) {

@@ -21,6 +21,7 @@ export default function DataUploadTab() {
   const [staged, setStaged] = useState(null) // { file, headers, rows, name, kind, description }
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const [lastSeedResult, setLastSeedResult] = useState(null)
   const fileRef = useRef(null)
 
   useEffect(() => { refresh() }, [])
@@ -69,14 +70,17 @@ export default function DataUploadTab() {
     if (!staged) return
     setSaving(true)
     setError(null)
+    setLastSeedResult(null)
     try {
-      await createUpload({
+      const result = await createUpload({
         name: staged.name,
         kind: staged.kind,
         description: staged.description,
         headers: staged.headers,
         rows: staged.rows,
       })
+      if (result?.seed_result) setLastSeedResult(result.seed_result)
+      if (result?.seed_error) setError('Seeding failed: ' + result.seed_error)
       setStaged(null)
       if (fileRef.current) fileRef.current.value = ''
       await refresh()
@@ -251,6 +255,22 @@ export default function DataUploadTab() {
           <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
             <AlertTriangle size={14} className="text-red-500 mt-0.5 shrink-0" />
             <p className="text-xs text-red-700">{error}</p>
+          </div>
+        )}
+
+        {lastSeedResult && !error && (
+          <div className="mt-3 bg-green-50 border border-green-200 rounded-lg p-3">
+            <div className="flex items-start gap-2">
+              <Check size={14} className="text-green-600 mt-0.5 shrink-0" />
+              <div className="text-xs text-green-800">
+                {lastSeedResult.kind === 'clients' && (
+                  <>Seeded <strong>{lastSeedResult.firms}</strong> firms and <strong>{lastSeedResult.contacts}</strong> contacts on the Accounts tab.</>
+                )}
+                {lastSeedResult.kind === 'quotes' && (
+                  <>Seeded <strong>{lastSeedResult.quotes}</strong> quotes {lastSeedResult.linkedToFirm > 0 && <>({lastSeedResult.linkedToFirm} auto-linked to firms)</>}. View them on the Pipeline tab.</>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

@@ -231,6 +231,76 @@ create table social_signals (
 create index idx_social_signals_status on social_signals(status, created_at desc);
 create index idx_social_signals_source on social_signals(source);
 
+-- Firms: the "accounts" in CRM terms — companies/design studios/GCs.
+-- Seeded from kind=clients uploads, can be manually added/edited later.
+-- A firm has many contacts and many quotes over time.
+create table firms (
+  id text primary key,                    -- stable id, often a slug of the name
+  name text not null,
+  type text,                                -- designer | architect | gc | developer | homeowner | other
+  city text,
+  state text,
+  website text,
+  instagram text,
+  notes text,
+  source text default 'manual',             -- manual | upload | meeting | signal
+  source_upload_id text,                    -- FK to uploads.id if seeded from a bulk upload
+  tags jsonb,                               -- free-form tags for plain-English search later
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index idx_firms_name on firms(lower(name));
+create index idx_firms_type on firms(type);
+
+-- Firm contacts: multiple contacts per firm. Separate from the existing
+-- `contacts` table (which is linked to properties) — over time these may
+-- merge, but for now they serve different purposes.
+create table firm_contacts (
+  id text primary key,
+  firm_id text references firms(id) on delete cascade,
+  name text not null,
+  title text,
+  email text,
+  phone text,
+  instagram text,
+  linkedin text,
+  notes text,
+  is_primary boolean default false,
+  source text default 'manual',
+  source_upload_id text,
+  created_at timestamptz default now()
+);
+create index idx_firm_contacts_firm on firm_contacts(firm_id);
+create index idx_firm_contacts_email on firm_contacts(lower(email));
+
+-- Quotes: seeded from kind=quotes uploads and kept in sync by periodic
+-- StoneProfits delta scans. Each quote can be linked to a firm, a
+-- meeting, or a property after the fact.
+create table quotes (
+  id text primary key,
+  quote_number text,
+  quote_date date,
+  customer_name text,                       -- raw customer string from the upload
+  contact_name text,
+  project_name text,
+  address text,
+  materials text,                           -- free text or comma-separated
+  total_value numeric,
+  status text,                              -- draft | sent | accepted | expired | cancelled
+  firm_id text references firms(id) on delete set null,
+  meeting_id text,                          -- loose link to meetings.id
+  property_id uuid references properties(id) on delete set null,
+  source text default 'manual',             -- manual | upload | stoneprofits_scan
+  source_upload_id text,
+  raw_data jsonb,                           -- original row from the upload
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index idx_quotes_firm on quotes(firm_id);
+create index idx_quotes_status on quotes(status);
+create index idx_quotes_quote_date on quotes(quote_date desc);
+create index idx_quotes_meeting on quotes(meeting_id);
+
 -- Indexes
 create index idx_properties_priority on properties(priority);
 create index idx_properties_status on properties(status);
