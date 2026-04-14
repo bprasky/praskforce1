@@ -115,6 +115,11 @@ export const DEFAULT_CONFIG = {
   supabase: {
     url: '',
     anon_key: '',
+    // Service role key — bypasses RLS, needed by the Node runner.
+    // Never exposed to the browser at runtime (never prefixed with
+    // NEXT_PUBLIC_). Only used by the env export flow to write
+    // SUPABASE_SERVICE_ROLE_KEY to .env.local.
+    service_role_key: '',
   },
 }
 
