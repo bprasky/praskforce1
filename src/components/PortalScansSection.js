@@ -8,8 +8,16 @@ import { isAutoPortal } from '@/lib/scraper-registry'
 import {
   Globe, Play, Copy, Check, ClipboardPaste, X, AlertTriangle,
   ExternalLink, RefreshCw, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, CheckCircle2,
-  Bot, Clipboard, Loader2
+  Bot, Clipboard, Loader2, Search, Building2, User, FileSearch
 } from 'lucide-react'
+
+// Portal roles grouped for the UI. Order = display order on /leads.
+const ROLE_GROUPS = [
+  { role: 'discovery',         label: 'Discovery',          desc: 'sources of new target addresses', Icon: Search },
+  { role: 'enrichment',        label: 'Permit Enrichment',  desc: 'look up permits for a known address', Icon: Building2 },
+  { role: 'property_research', label: 'Property Research',  desc: 'sales, ownership, folio', Icon: FileSearch },
+  { role: 'entity_research',   label: 'Entity Research',    desc: 'LLCs, officers, registered agents', Icon: User },
+]
 
 function formatDate(iso) {
   if (!iso) return 'never'
@@ -27,6 +35,78 @@ function StatusPill({ status }) {
     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${info.bg} ${info.color} border ${info.border}`}>
       {info.label}
     </span>
+  )
+}
+
+function PortalRow({ p, isFirst, latest, activeJobsCount, onRun }) {
+  const status = latest?.status || 'pending'
+  const isFailed = status === 'failed' || status === 'partial'
+  const missingCred = p.login_required && !p.credential_key
+  const auto = isAutoPortal(p.id)
+  // Best-effort running indicator. We don't currently track which
+  // portal each in-flight job covers.
+  const isRunning = activeJobsCount > 0
+
+  return (
+    <div className={`px-4 py-3 flex items-center gap-3 ${isFirst ? '' : 'border-t border-gray-100'} ${isFailed ? 'bg-red-50/30' : ''}`}>
+      <div className="flex items-center gap-2 shrink-0 w-6">
+        {p.login_required ? (
+          missingCred
+            ? <ShieldAlert size={14} className="text-red-500" />
+            : <ShieldCheck size={14} className="text-gray-400" />
+        ) : (
+          <Globe size={14} className="text-gray-300" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+          <span className="text-sm font-semibold text-gray-900 truncate">{p.name}</span>
+          <StatusPill status={status} />
+          {auto ? (
+            <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
+              <Bot size={8} /> AUTO
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100">
+              <Clipboard size={8} /> MANUAL
+            </span>
+          )}
+          {isRunning && auto && (
+            <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+              <Loader2 size={10} className="animate-spin" /> running
+            </span>
+          )}
+          {p.municipality && <span className="text-[10px] text-gray-400">{p.municipality}</span>}
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-gray-500">
+          <span>Last scan: {formatDate(latest?.scanned_at)}</span>
+          {latest?.permits_found > 0 && (
+            <span>{latest.permits_found} permits · {latest.new_permits || 0} new</span>
+          )}
+          {latest?.error_details && (
+            <span className="text-red-600 truncate max-w-md" title={latest.error_details}>
+              ⚠ {latest.error_details}
+            </span>
+          )}
+          {missingCred && <span className="text-red-600">⚠ no credential configured</span>}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        {p.url && (
+          <a href={p.url} target="_blank" rel="noreferrer" className="p-1.5 text-gray-400 hover:text-amber-600 rounded" title="Open portal">
+            <ExternalLink size={12} />
+          </a>
+        )}
+        <button
+          onClick={() => onRun(p)}
+          disabled={missingCred}
+          className="px-2 py-1 text-[10px] font-medium bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          title={missingCred ? 'Set credential first' : 'Scan only this portal'}
+        >
+          Scan
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -461,90 +541,28 @@ export default function PortalScansSection() {
               <p className="text-xs text-gray-500">No portals enabled. Enable portals in <a href="/settings" className="text-amber-600 hover:underline">Configuration → Portals</a>.</p>
             </div>
           ) : (
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-              {enabledPortals.map((p, i) => {
-                const latest = latestByPortal[p.id]
-                const status = latest?.status || 'pending'
-                const isFailed = status === 'failed' || status === 'partial'
-                const missingCred = p.login_required && !p.credential_key
-                const auto = isAutoPortal(p.id)
-                const isRunning = Object.values(activeJobs).some(j =>
-                  j.status === 'running' || j.status === 'queued'
-                ) && Object.entries(activeJobs).some(([id]) => {
-                  // Best-effort: mark any portal as "running" if any active
-                  // job is in flight. We don't track which portal belongs
-                  // to which job at this level of granularity.
-                  return true
-                })
+            <div className="space-y-4">
+              {ROLE_GROUPS.map(group => {
+                const portalsInGroup = enabledPortals.filter(p => (p.role || 'enrichment') === group.role)
+                if (portalsInGroup.length === 0) return null
                 return (
-                  <div
-                    key={p.id}
-                    className={`px-4 py-3 flex items-center gap-3 ${i > 0 ? 'border-t border-gray-100' : ''} ${isFailed ? 'bg-red-50/30' : ''}`}
-                  >
-                    <div className="flex items-center gap-2 shrink-0 w-6">
-                      {p.login_required ? (
-                        missingCred
-                          ? <ShieldAlert size={14} className="text-red-500" title="Missing credential" />
-                          : <ShieldCheck size={14} className="text-gray-400" title={`Login: ${p.credential_key}`} />
-                      ) : (
-                        <Globe size={14} className="text-gray-300" />
-                      )}
+                  <div key={group.role}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <group.Icon size={12} className="text-gray-400" />
+                      <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{group.label}</h3>
+                      <span className="text-[10px] text-gray-400 font-normal">{group.desc}</span>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                        <span className="text-sm font-semibold text-gray-900 truncate">{p.name}</span>
-                        <StatusPill status={status} />
-                        {auto ? (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
-                            <Bot size={8} /> AUTO
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100">
-                            <Clipboard size={8} /> MANUAL
-                          </span>
-                        )}
-                        {isRunning && auto && (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
-                            <Loader2 size={10} className="animate-spin" /> running
-                          </span>
-                        )}
-                        {p.municipality && <span className="text-[10px] text-gray-400">{p.municipality}</span>}
-                      </div>
-                      <div className="flex items-center gap-3 text-[11px] text-gray-500">
-                        <span>Last scan: {formatDate(latest?.scanned_at)}</span>
-                        {latest?.permits_found > 0 && (
-                          <span>{latest.permits_found} permits · {latest.new_permits || 0} new</span>
-                        )}
-                        {latest?.error_details && (
-                          <span className="text-red-600 truncate max-w-md" title={latest.error_details}>
-                            ⚠ {latest.error_details}
-                          </span>
-                        )}
-                        {missingCred && (
-                          <span className="text-red-600">⚠ no credential configured</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {p.url && (
-                        <a
-                          href={p.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1.5 text-gray-400 hover:text-amber-600 rounded"
-                          title="Open portal"
-                        >
-                          <ExternalLink size={12} />
-                        </a>
-                      )}
-                      <button
-                        onClick={() => handleRunOne(p)}
-                        disabled={missingCred}
-                        className="px-2 py-1 text-[10px] font-medium bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={missingCred ? 'Set credential first' : 'Scan only this portal'}
-                      >
-                        Scan
-                      </button>
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      {portalsInGroup.map((p, i) => (
+                        <PortalRow
+                          key={p.id}
+                          p={p}
+                          isFirst={i === 0}
+                          latest={latestByPortal[p.id]}
+                          activeJobsCount={Object.keys(activeJobs).length}
+                          onRun={handleRunOne}
+                        />
+                      ))}
                     </div>
                   </div>
                 )

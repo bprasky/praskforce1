@@ -13,16 +13,24 @@
 //   3. That's it — the runner and UI will automatically pick it up.
 
 const { scrapeMiamiDade } = require('./miami-dade')
+const { scrapeZillowSold } = require('./zillow')
+const { scrapePropertyReports } = require('./property-reports')
 
 const SCRAPERS = {
+  // Discovery
+  zillow_sold: scrapeZillowSold,
+  property_reports: scrapePropertyReports,
+
+  // Enrichment
   dade_county: scrapeMiamiDade,
-  // TODO: add scrapers for other portals as we build them
+  // TODO: add scrapers for other enrichment portals
   // cg_eden: scrapeCoralGablesEden,
-  // sunbiz: scrapeSunbiz,
-  // property_appraiser: scrapePropertyAppraiser,
   // mb_civic: scrapeMiamiBeachCivic,       // needs credentials
   // miami_ibuild: scrapeCityOfMiamiIBuild, // needs credentials
-  // property_reports: scrapePropertyReports, // needs credentials
+
+  // Research
+  // sunbiz: scrapeSunbiz,
+  // property_appraiser: scrapePropertyAppraiser,
 }
 
 /** Returns true if a real scraper is registered for this portal_id. */

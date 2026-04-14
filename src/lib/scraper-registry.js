@@ -9,6 +9,8 @@
 // KEEP IN SYNC with scripts/scrapers/index.js:SCRAPERS. Only portal_ids.
 
 export const AUTO_SCRAPER_PORTAL_IDS = new Set([
+  'zillow_sold',
+  'property_reports',
   'dade_county',
   // Add portal_ids here as we add real scrapers in scripts/scrapers/index.js
 ])

@@ -299,22 +299,40 @@ BEGIN — navigate to instagram.com.`
       const neighborhoods = (filters.neighborhoods || []).join(', ') || '(any)'
       const lookbackDays = filters.days_lookback || 90
 
+      const ROLE_HINTS = {
+        discovery: 'Use this portal to find NEW recently-closed sales or listed properties above the price floor. This is a DISCOVERY source — the goal is to emerge with a list of addresses you did not have before.',
+        enrichment: 'Use this portal to look up permits for addresses from the priority list below. This is an ENRICHMENT source — do NOT try to do broad date-range scans. If there are no priority addresses, skip with status=skipped.',
+        property_research: 'Use this portal to look up ownership, sales history, and folio data for addresses from the priority list. Skip if no priority addresses. This is PROPERTY RESEARCH — not a permit discovery tool.',
+        entity_research: 'Use this portal to look up LLCs or officers mentioned in the priority addresses. Skip if no priority entities. This is ENTITY RESEARCH — not a permit discovery tool.',
+      }
+
       const portalList = portals.map(p => {
         const auth = p.login_required
           ? (p.credential_key
               ? `REQUIRES LOGIN — use 1Password item "${p.credential_key}"`
               : `REQUIRES LOGIN — NO CREDENTIAL CONFIGURED — MARK AS FAILED with error "Missing credential key"`)
           : 'public (no login)'
+        const role = p.role || 'enrichment'
+        const roleHint = ROLE_HINTS[role] || ''
         return `  - id: ${p.id}
     name: ${p.name}
+    role: ${role.toUpperCase()}
     url: ${p.url}
     municipality: ${p.municipality || '(n/a)'}
-    auth: ${auth}`
+    auth: ${auth}
+    hint: ${roleHint}`
       }).join('\n')
 
       return `You are an automation agent working for Brad Prasky at ARCA Worldwide.
 
-TASK: Scan all enabled permit portals for new building permits. Return a strict, structured report. THIS IS IMPORTANT: you must report a status for EVERY portal below, even if it fails or is skipped. Silent failures are not acceptable.
+TASK: Pull high-value real-estate intelligence for Brad's pipeline. Portals come in several flavors — read the "role" field for each one and treat them differently:
+
+  - DISCOVERY portals: search for recently-sold or newly-listed properties matching the filters below. These are the primary source of NEW addresses. Return each qualifying property as an entry in the "permits" array with permit_type="Recent Sale" and the sale price in the "valuation" field.
+  - ENRICHMENT portals: permit lookup tools. Only run them against the priority addresses list. If no priority addresses are provided, SKIP these with status=skipped and explain that enrichment has nothing to enrich.
+  - PROPERTY_RESEARCH portals: ownership/folio lookups. Same rule — only against priority addresses.
+  - ENTITY_RESEARCH portals: LLC and officer lookups. Only against entities mentioned in the priority addresses. Otherwise skip.
+
+Return a strict, structured report. THIS IS IMPORTANT: you must report a status for EVERY portal below, even if it fails or is skipped. Silent failures are not acceptable.
 
 ═══════════════════════════════════════════════════════════════════
 SCAN FILTERS (only surface permits matching these criteria)

@@ -5,15 +5,48 @@ automated system. It polls the `agent_jobs` table in Supabase for queued work
 and dispatches each job to a handler — portal scans, IG rundowns, StoneProfits
 quotes, etc.
 
+## Discovery vs Enrichment: how the portals are actually used
+
+The permit portals in this system serve two very different purposes,
+and you should keep them straight or the scrapers will do the wrong
+thing:
+
+**Discovery sources** are firehoses that surface NEW addresses:
+  - `zillow_sold`: recent sales in a geographic area
+  - `property_reports`: recent transactions via PropertyReports.us (paid)
+
+Discovery scrapers run on a schedule (overnight, e.g.) and return a
+list of new candidate properties with address + price. These get
+written to the permits table as "Recent Sale" rows and surface in
+the Leads page.
+
+**Enrichment sources** are LOOKUP tools, not search tools. Given a
+known address, they return permit/ownership data about that specific
+address. You cannot ask them "give me all permits filed this week"
+— the municipal portals simply don't work that way.
+  - `mb_civic`: Miami Beach Civic Access permit lookup
+  - `cg_eden`: Coral Gables EdenWeb
+  - `miami_ibuild`: City of Miami iBuild
+  - `dade_county`: Miami-Dade County ePermitting
+
+Enrichment scrapers run on-demand against a list of target addresses,
+not on a fixed schedule.
+
+**Research sources** are even more specialized — Property Appraiser
+for ownership history, Sunbiz for LLC/officer lookups. They run as
+part of enrichment against a known entity or address.
+
 ## Current state
 
 - **Portal scan handler**: real. Dispatches to per-portal Playwright scrapers
-  registered in `scripts/scrapers/index.js`. First scraper is **Miami-Dade
-  County** (`scripts/scrapers/miami-dade.js`) — currently a diagnostic first
-  pass that dumps screenshots + HTML to `scripts/scrapers/.debug/` so we can
-  iterate against real portal output. Portals without a registered scraper
-  are marked "skipped" and fall back to the Claude-in-Chrome copy-paste flow
-  on `/leads`.
+  registered in `scripts/scrapers/index.js`. Active scrapers:
+  - `zillow_sold` (discovery, public) — diagnostic first pass
+  - `property_reports` (discovery, credentialed) — diagnostic first pass
+  - `dade_county` (enrichment, public) — diagnostic first pass
+  All three dump screenshots + HTML to `scripts/scrapers/.debug/` on every
+  run so we can iterate against real portal output. Portals without a
+  registered scraper are marked "skipped" and fall back to the
+  Claude-in-Chrome copy-paste flow on `/leads`.
 - **IG daily scroll, SP quote, Outlook recap handlers**: stubs. These need
   Playwright + per-portal login flows. See the TODO comments in `runner.js`.
 
@@ -167,10 +200,39 @@ Then:
 3. Done — the runner and UI pick it up automatically.
 
 **For credentialed portals** (Miami Beach Civic, City of Miami iBuild,
-PropertyReports), read credentials from `process.env.PF1_<PORTAL>_USERNAME`
-and `process.env.PF1_<PORTAL>_PASSWORD`. Put them in `.env.local` (gitignored)
-for local runs, or GitHub Actions secrets for the CI workflow. See the
-GitHub Actions setup below.
+PropertyReports), read credentials from environment variables with
+these exact names:
+
+```
+PF1_PROPERTY_REPORTS_USERNAME / PF1_PROPERTY_REPORTS_PASSWORD
+PF1_MB_CIVIC_USERNAME         / PF1_MB_CIVIC_PASSWORD
+PF1_MIAMI_IBUILD_USERNAME     / PF1_MIAMI_IBUILD_PASSWORD
+```
+
+Put them in `.env.local` in the repo root (gitignored) for local runs:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+PF1_PROPERTY_REPORTS_USERNAME=brad@...
+PF1_PROPERTY_REPORTS_PASSWORD=...
+```
+
+Node doesn't auto-load `.env.local` — either:
+
+1. Use `dotenv-cli`: `npx dotenv -e .env.local -- node scripts/runner.js`
+2. Or in PowerShell, source it manually:
+   ```powershell
+   Get-Content .env.local | ForEach-Object {
+     if ($_ -match '^([^=#]+)=(.*)$') { $env:($matches[1].Trim()) = $matches[2].Trim() }
+   }
+   node scripts/runner.js
+   ```
+3. Or pass them inline on the command line (not recommended — shows in history).
+
+For GitHub Actions runs, add each as a repo secret under
+Settings → Secrets and variables → Actions, then reference them in the
+workflow `env:` block.
 
 ## The diagnostic pattern (for iterating on a new scraper)
 
