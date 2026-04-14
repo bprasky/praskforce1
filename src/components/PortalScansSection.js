@@ -1,12 +1,14 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getConfig } from '@/lib/config'
 import { generateAgentPrompt } from '@/lib/agent-prompts'
 import { getLatestPerPortal, ingestScanResults, SCAN_STATUS } from '@/lib/portal-scans'
-import { createJob, updateJob } from '@/lib/agent-jobs'
+import { createJob, updateJob, listJobs } from '@/lib/agent-jobs'
+import { isAutoPortal } from '@/lib/scraper-registry'
 import {
   Globe, Play, Copy, Check, ClipboardPaste, X, AlertTriangle,
-  ExternalLink, RefreshCw, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, CheckCircle2
+  ExternalLink, RefreshCw, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, CheckCircle2,
+  Bot, Clipboard, Loader2
 } from 'lucide-react'
 
 function formatDate(iso) {
@@ -44,6 +46,11 @@ export default function PortalScansSection() {
   const [copied, setCopied] = useState(false)
   const [ingesting, setIngesting] = useState(false)
   const [expanded, setExpanded] = useState(true)
+  // activeJobs: { [jobId]: { status, kind, created_at } } — jobs we've
+  // queued from this session and are watching for completion
+  const [activeJobs, setActiveJobs] = useState({})
+  const [runnerHint, setRunnerHint] = useState(null)
+  const pollRef = useRef(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -63,9 +70,64 @@ export default function PortalScansSection() {
 
   useEffect(() => { refresh() }, [refresh])
 
+  // Poll agent_jobs for active portal_scan jobs queued from this session.
+  // When any flips to done/failed, refresh the portal status and clear
+  // it from the active set. The runner (node scripts/runner.js --daemon)
+  // is what actually processes these — the poll is just for UI feedback.
+  useEffect(() => {
+    if (Object.keys(activeJobs).length === 0) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      return
+    }
+    if (pollRef.current) return
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const jobs = await listJobs({ kind: 'portal_scan' })
+        const jobsById = {}
+        for (const j of jobs) jobsById[j.id] = j
+
+        let anyCompleted = false
+        const nextActive = { ...activeJobs }
+        for (const id of Object.keys(activeJobs)) {
+          const latest = jobsById[id]
+          if (!latest) continue
+          if (latest.status === 'done' || latest.status === 'failed' || latest.status === 'needs_review') {
+            delete nextActive[id]
+            anyCompleted = true
+          } else {
+            nextActive[id] = { status: latest.status, kind: latest.kind, created_at: latest.created_at }
+          }
+        }
+
+        if (anyCompleted || Object.keys(nextActive).length !== Object.keys(activeJobs).length) {
+          setActiveJobs(nextActive)
+          await refresh()
+        }
+      } catch (e) {
+        console.warn('Polling failed:', e)
+      }
+    }, 3000)
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [activeJobs, refresh])
+
   const enabledPortals = portals.filter(p => p.enabled)
   const scannablePortals = enabledPortals.filter(p => !p.login_required || p.credential_key)
   const missingCreds = enabledPortals.filter(p => p.login_required && !p.credential_key)
+
+  // Split enabled+scannable portals into auto (has a Playwright scraper
+  // registered) and manual (falls back to Claude-in-Chrome copy-paste)
+  const autoPortals = scannablePortals.filter(p => isAutoPortal(p.id))
+  const manualPortals = scannablePortals.filter(p => !isAutoPortal(p.id))
 
   // Summary counters for the header
   const counts = { success: 0, partial: 0, failed: 0, pending: 0 }
@@ -77,31 +139,73 @@ export default function PortalScansSection() {
     else counts.failed++
   }
 
+  /**
+   * Queue a scan. Splits the target portal list into "auto" (has a
+   * registered Playwright scraper in scripts/scrapers/) and "manual"
+   * (needs Claude-in-Chrome copy-paste).
+   *
+   * Auto portals: queue one job, surface it in activeJobs so the
+   *   polling loop watches for completion. Runner picks it up.
+   * Manual portals: queue one job AND generate the Claude-in-Chrome
+   *   prompt for the user to copy-paste, same as before.
+   *
+   * If the target list mixes auto and manual, we queue two separate
+   * jobs so the auto one can complete independently of the manual one.
+   */
   async function handleRun(portalsToScan) {
     if (!portalsToScan.length) return
+    setRunnerHint(null)
+
+    const auto = portalsToScan.filter(p => isAutoPortal(p.id))
+    const manual = portalsToScan.filter(p => !isAutoPortal(p.id))
+
     try {
-      const prompt = generateAgentPrompt('SCAN-ALL-PORTALS-001', {
-        portals: portalsToScan,
-        filters,
-      })
-      const job = await createJob({
-        kind: 'portal_scan',
-        priority: 3,
-        payload: {
-          portal_ids: portalsToScan.map(p => p.id),
-          portal_count: portalsToScan.length,
+      // Auto job — runner will process this one
+      if (auto.length > 0) {
+        const autoJob = await createJob({
+          kind: 'portal_scan',
+          priority: 3,
+          payload: {
+            portal_ids: auto.map(p => p.id),
+            portal_count: auto.length,
+            filters,
+            runtime: 'runner',
+          },
+        })
+        setActiveJobs(prev => ({ ...prev, [autoJob.id]: { status: 'queued', kind: 'portal_scan', created_at: autoJob.created_at } }))
+        setRunnerHint(
+          `Queued ${auto.length} auto portal${auto.length > 1 ? 's' : ''} for the runner. ` +
+          `Make sure \`node scripts/runner.js --daemon\` is running in another terminal — ` +
+          `the job will pick up within ~5 seconds and results will stream in here.`
+        )
+      }
+
+      // Manual job — user copy-pastes into Claude-in-Chrome
+      if (manual.length > 0) {
+        const prompt = generateAgentPrompt('SCAN-ALL-PORTALS-001', {
+          portals: manual,
           filters,
-        },
-      })
-      setGeneratedPrompt(prompt)
-      setRequestedPortals(portalsToScan)
-      setPromptJobId(job.id)
-      setPromptOpen(true)
-      setPasteOpen(false)
-      setIngestResult(null)
-      setPasteError(null)
+        })
+        const manualJob = await createJob({
+          kind: 'portal_scan',
+          priority: 3,
+          payload: {
+            portal_ids: manual.map(p => p.id),
+            portal_count: manual.length,
+            filters,
+            runtime: 'claude_in_chrome',
+          },
+        })
+        setGeneratedPrompt(prompt)
+        setRequestedPortals(manual)
+        setPromptJobId(manualJob.id)
+        setPromptOpen(true)
+        setPasteOpen(false)
+        setIngestResult(null)
+        setPasteError(null)
+      }
     } catch (e) {
-      setPasteError('Failed to build scan prompt: ' + e.message)
+      setPasteError('Failed to queue scan: ' + e.message)
     }
   }
 
@@ -219,6 +323,21 @@ export default function PortalScansSection() {
 
       {expanded && (
         <>
+          {/* Runner hint — shown after queuing an auto job */}
+          {runnerHint && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+              <div className="flex items-start gap-2">
+                <Bot size={14} className="text-green-600 mt-0.5 shrink-0" />
+                <div className="flex-1 text-[11px] text-green-800 leading-relaxed">
+                  {runnerHint}
+                </div>
+                <button onClick={() => setRunnerHint(null)} className="text-green-600 hover:text-green-800">
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Missing credentials warning */}
           {missingCreds.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
@@ -348,6 +467,15 @@ export default function PortalScansSection() {
                 const status = latest?.status || 'pending'
                 const isFailed = status === 'failed' || status === 'partial'
                 const missingCred = p.login_required && !p.credential_key
+                const auto = isAutoPortal(p.id)
+                const isRunning = Object.values(activeJobs).some(j =>
+                  j.status === 'running' || j.status === 'queued'
+                ) && Object.entries(activeJobs).some(([id]) => {
+                  // Best-effort: mark any portal as "running" if any active
+                  // job is in flight. We don't track which portal belongs
+                  // to which job at this level of granularity.
+                  return true
+                })
                 return (
                   <div
                     key={p.id}
@@ -366,6 +494,20 @@ export default function PortalScansSection() {
                       <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                         <span className="text-sm font-semibold text-gray-900 truncate">{p.name}</span>
                         <StatusPill status={status} />
+                        {auto ? (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
+                            <Bot size={8} /> AUTO
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100">
+                            <Clipboard size={8} /> MANUAL
+                          </span>
+                        )}
+                        {isRunning && auto && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                            <Loader2 size={10} className="animate-spin" /> running
+                          </span>
+                        )}
                         {p.municipality && <span className="text-[10px] text-gray-400">{p.municipality}</span>}
                       </div>
                       <div className="flex items-center gap-3 text-[11px] text-gray-500">

@@ -65,45 +65,145 @@ const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
 /**
  * Portal scan handler.
  *
- * TODO: wire this up to a real scraper. Options:
- *  a) fetch + cheerio for public portals with HTML search forms
- *     (Miami-Dade County, Coral Gables EdenWeb, Sunbiz, Property
- *     Appraiser) — cheap, fast, no browser needed
- *  b) Playwright for credentialed portals (Miami Beach Civic, City
- *     of Miami iBuild, PropertyReports) — needs `npm i playwright`
- *     and `npx playwright install chromium`. Credentials via env.
+ * Dispatches to per-portal scrapers registered in scripts/scrapers/
+ * by portal_id. Portals without a registered scraper are marked
+ * "skipped" with a clear error, so the UI knows to offer the
+ * Claude-in-Chrome copy-paste fallback for them.
  *
- * The stub below just pretends to scan and returns an empty result
- * so the dispatch loop and ingestion contract can be verified end
- * to end before the real scraping is added.
+ * After scrapers run, this handler writes results directly to the
+ * scan_log and permits tables in Supabase — the same way the UI's
+ * ingestScanResults does when processing a copy-paste paste-back,
+ * but implemented server-side since the runner has its own Supabase
+ * client.
  *
- * Contract: return an object with the same shape ingestScanResults
- * expects in src/lib/portal-scans.js:
+ * Contract returned (matches ingestScanResults input shape):
  *   {
  *     portal_results: [{ portal_id, status, permits_found, new_permits, error, summary }],
- *     permits: [{ portal_id, permit_number, address, permit_type, ... }]
+ *     permits: [...]
  *   }
  */
 async function handlePortalScan(job) {
+  const { getScraper, hasScraper } = require('./scrapers')
   const portalIds = job.payload?.portal_ids || []
-  console.log(`  [portal_scan] stub handler — would scan ${portalIds.length} portal(s):`, portalIds.join(', '))
+  const filters = job.payload?.filters || {}
 
-  // TODO: for each portal_id, call a scraper like:
-  //   const result = await scrapePortal(portalId, job.payload.filters)
-  //
-  // For now, return a dry-run response so the flow can be tested.
-  const dryRun = {
-    portal_results: portalIds.map(pid => ({
-      portal_id: pid,
-      status: 'skipped',
-      permits_found: 0,
-      new_permits: 0,
-      error: 'Runner stub — real scraper not yet implemented. See scripts/runner.js:handlePortalScan.',
-      summary: null,
-    })),
-    permits: [],
+  console.log(`  [portal_scan] processing ${portalIds.length} portal(s): ${portalIds.join(', ')}`)
+
+  const portalResults = []
+  const allPermits = []
+
+  for (const portalId of portalIds) {
+    if (!hasScraper(portalId)) {
+      console.log(`    ${portalId}: no scraper registered, skipping`)
+      portalResults.push({
+        portal_id: portalId,
+        status: 'skipped',
+        permits_found: 0,
+        new_permits: 0,
+        error: 'No automated scraper registered for this portal. Use the Claude-in-Chrome copy-paste flow on /leads for manual scans.',
+        summary: null,
+      })
+      continue
+    }
+
+    console.log(`    ${portalId}: running scraper...`)
+    const scraper = getScraper(portalId)
+    try {
+      const result = await scraper({
+        filters,
+        logger: msg => console.log(`      ${msg}`),
+      })
+      portalResults.push({
+        portal_id: portalId,
+        status: result.status,
+        permits_found: result.permits_found || result.permits?.length || 0,
+        new_permits: result.new_permits || 0,
+        error: result.error,
+        summary: result.summary,
+      })
+      if (Array.isArray(result.permits)) {
+        allPermits.push(...result.permits)
+      }
+      console.log(`    ${portalId}: ${result.status} (${result.permits_found || 0} permits)`)
+    } catch (e) {
+      console.error(`    ${portalId}: scraper threw —`, e.message)
+      portalResults.push({
+        portal_id: portalId,
+        status: 'failed',
+        permits_found: 0,
+        new_permits: 0,
+        error: `Scraper threw: ${e.message}`,
+        summary: null,
+      })
+    }
   }
-  return dryRun
+
+  // Write scan_log rows and upsert permits directly to Supabase. This
+  // duplicates some logic from src/lib/portal-scans.js — acceptable
+  // for now since the lib uses the browser Supabase client and we're
+  // in Node. Can be refactored into a shared module later.
+  const nowIso = new Date().toISOString()
+  const scanLogRows = portalResults.map(r => ({
+    portal: r.portal_id,
+    portal_id: r.portal_id,
+    scan_type: 'portal_scan',
+    status: r.status,
+    result_summary: r.summary || null,
+    error_details: (r.status === 'failed' || r.status === 'partial' || r.status === 'skipped')
+      ? (r.error || 'No error detail provided by scraper')
+      : null,
+    permits_found: r.permits_found || 0,
+    new_permits: r.new_permits || 0,
+    found_new_data: (r.new_permits || 0) > 0,
+    scanned_at: nowIso,
+  }))
+
+  if (scanLogRows.length > 0) {
+    const { error: logErr } = await sb.from('scan_log').insert(scanLogRows)
+    if (logErr) console.error('Failed to write scan_log rows:', logErr.message)
+    else console.log(`    wrote ${scanLogRows.length} scan_log rows`)
+  }
+
+  if (allPermits.length > 0) {
+    // Dedup by (portal_source, permit_number) via delete-then-insert
+    const portalSources = [...new Set(allPermits.map(p => p.portal_id).filter(Boolean))]
+    const permitNumbers = allPermits.map(p => p.permit_number).filter(Boolean)
+    if (portalSources.length && permitNumbers.length) {
+      await sb.from('permits').delete()
+        .in('portal_source', portalSources)
+        .in('permit_number', permitNumbers)
+    }
+    const insertRows = allPermits.map(p => ({
+      permit_number: p.permit_number || null,
+      permit_type: p.permit_type || null,
+      permit_status: p.permit_status || null,
+      date_filed: p.date_filed || null,
+      date_issued: p.date_issued || null,
+      valuation: typeof p.valuation === 'number' ? p.valuation : null,
+      scope_description: p.scope_description || null,
+      applicant_name: p.applicant_name || null,
+      contractor_name: p.contractor_name || null,
+      contractor_license: p.contractor_license || null,
+      architect_name: p.architect_name || null,
+      architect_license: p.architect_license || null,
+      engineer_name: p.engineer_name || null,
+      arca_tier: p.arca_tier || null,
+      portal_source: p.portal_id || null,
+      raw_data: {
+        address: p.address || null,
+        raw_link: p.raw_link || null,
+      },
+      scanned_at: nowIso,
+    }))
+    const { error: permErr } = await sb.from('permits').insert(insertRows)
+    if (permErr) console.error('Failed to insert permits:', permErr.message)
+    else console.log(`    inserted ${insertRows.length} permit rows`)
+  }
+
+  return {
+    portal_results: portalResults,
+    permits_count: allPermits.length,
+  }
 }
 
 /** Instagram daily rundown — stub. */

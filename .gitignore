@@ -2,3 +2,6 @@ node_modules/
 .next/
 .env.local
 .env
+
+# Playwright scraper debug dumps (screenshots + HTML from diagnostic runs)
+scripts/scrapers/.debug/
