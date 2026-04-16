@@ -6,6 +6,8 @@ import { getMeetings, getTasks, updateTask, TASK_TYPES, TASK_STATUS } from '@/li
 import { listJobs, updateJob, createJob, JOB_STATUS } from '@/lib/agent-jobs'
 import { draftRecap, DEAL_STAGES } from '@/lib/recap'
 import { listQuotes, updateQuote, QUOTE_STATUS } from '@/lib/quotes'
+import { getPipelineDealHealth } from '@/lib/task-tree-stats'
+import TreeHealthBadge from '@/components/TreeHealthBadge'
 import {
   Briefcase, FileText, Send, ExternalLink, Plus, CheckCircle, Play,
   Clock, User, MapPin, Zap, RefreshCw, Copy, AlertTriangle, Sparkles,
@@ -46,6 +48,7 @@ export default function PipelinePage() {
   const [tasks, setTasks] = useState([])
   const [jobs, setJobs] = useState([])
   const [quotes, setQuotes] = useState([])
+  const [dealHealth, setDealHealth] = useState({})  // { [dealId]: { health, totalTasks, openTasks } }
   const [expanded, setExpanded] = useState({})  // { [meetingId]: true }
   const [redrafting, setRedrafting] = useState({}) // { [jobId]: true }
   const [copied, setCopied] = useState(null) // jobId
@@ -56,9 +59,14 @@ export default function PipelinePage() {
   const refresh = useCallback(async () => {
     setMeetings(getMeetings())
     setTasks(getTasks())
-    const [j, q] = await Promise.all([listJobs(), listQuotes()])
+    const [j, q, health] = await Promise.all([
+      listJobs(),
+      listQuotes(),
+      getPipelineDealHealth(),
+    ])
     setJobs(j)
     setQuotes(q || [])
+    setDealHealth(health || {})
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -262,6 +270,14 @@ export default function PipelinePage() {
                             <span className="flex items-center gap-1">
                               <Zap size={10} /> {deal.open} open · {deal.done} done
                             </span>
+                            {dealHealth[deal.id] && dealHealth[deal.id].totalTasks > 0 && (
+                              <TreeHealthBadge
+                                dealId={deal.id}
+                                health={dealHealth[deal.id].health}
+                                totalTasks={dealHealth[deal.id].totalTasks}
+                                openTasks={dealHealth[deal.id].openTasks}
+                              />
+                            )}
                           </div>
                         </div>
 

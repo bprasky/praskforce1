@@ -5,7 +5,8 @@ import {
   getCredentials, addCredential, updateCredential, deleteCredential, getRecommendedLogins
 } from '@/lib/vault'
 import { DEMO_PROPERTIES } from '@/lib/supabase'
-import { Lock, Unlock, Plus, Trash2, Eye, EyeOff, ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle, Zap, Pencil, X } from 'lucide-react'
+import { getConfig } from '@/lib/config'
+import { Lock, Unlock, Plus, Trash2, Eye, EyeOff, ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle, Zap, Pencil, X, FileDown } from 'lucide-react'
 
 const KNOWN_SERVICES = [
   { id: 'stoneprofits', name: 'StoneProfits', url: 'https://arca.stoneprofits.com' },
@@ -75,6 +76,44 @@ export default function CredentialsTab({ config }) {
     setUnlocked(false)
     setCreds([])
     setRecommendations([])
+  }
+
+  // Export the vault + relevant config values to .env.local via the
+  // dev-only API route. The Node runner sources that file and has
+  // everything it needs to run credentialed scrapers and write to
+  // Supabase with the service role key.
+  const [exportStatus, setExportStatus] = useState(null) // { ok, msg } or { error, msg }
+  const [exporting, setExporting] = useState(false)
+
+  async function handleExportEnv() {
+    setExporting(true)
+    setExportStatus(null)
+    try {
+      const cfg = getConfig()
+      const res = await fetch('/api/credentials/export-env', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          supabase: cfg.supabase,
+          ai: cfg.ai,
+          portals: cfg.portals,
+          credentials: creds,
+        }),
+      })
+      if (res.status === 404) {
+        throw new Error('Export endpoint not available. This only works in `npm run dev` mode (not in a deployed build).')
+      }
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Export failed')
+      setExportStatus({
+        ok: true,
+        msg: `Wrote .env.local (${data.bytes} bytes): ${data.portal_credentials_written} portal credentials${data.has_supabase_service_role ? ', Supabase service role key' : ''}${data.has_anthropic_key ? ', Claude API key' : ''}.`,
+      })
+    } catch (e) {
+      setExportStatus({ error: true, msg: e.message })
+    } finally {
+      setExporting(false)
+    }
   }
 
   async function handleAdd() {
@@ -202,6 +241,14 @@ export default function CredentialsTab({ config }) {
           <p className="text-xs text-gray-500">{creds.length} credentials stored · {portalsWithCreds.length}/{portalsNeedingLogin.length} portals configured</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportEnv}
+            disabled={exporting}
+            className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 flex items-center gap-1.5 disabled:opacity-50"
+            title="Mirror vault + config to .env.local for the Node runner"
+          >
+            <FileDown size={12} /> {exporting ? 'Exporting…' : 'Export to .env.local'}
+          </button>
           <button onClick={() => setAdding(true)} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-medium hover:bg-amber-600 flex items-center gap-1.5">
             <Plus size={12} /> Add Login
           </button>
@@ -212,6 +259,14 @@ export default function CredentialsTab({ config }) {
       </div>
 
       {error && <div className="text-xs text-red-600 mb-3 bg-red-50 border border-red-200 rounded-lg p-2">{error}</div>}
+
+      {exportStatus && (
+        <div className={`text-xs mb-3 rounded-lg p-2 border flex items-start gap-2 ${exportStatus.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {exportStatus.ok ? <CheckCircle size={14} className="mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="mt-0.5 shrink-0" />}
+          <div className="flex-1">{exportStatus.msg}</div>
+          <button onClick={() => setExportStatus(null)} className="text-gray-400 hover:text-gray-600"><X size={12} /></button>
+        </div>
+      )}
 
       {/* Recommendations */}
       {recommendations.length > 0 && (

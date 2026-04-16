@@ -1,13 +1,23 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getConfig } from '@/lib/config'
 import { generateAgentPrompt } from '@/lib/agent-prompts'
 import { getLatestPerPortal, ingestScanResults, SCAN_STATUS } from '@/lib/portal-scans'
-import { createJob, updateJob } from '@/lib/agent-jobs'
+import { createJob, updateJob, listJobs } from '@/lib/agent-jobs'
+import { isAutoPortal } from '@/lib/scraper-registry'
 import {
   Globe, Play, Copy, Check, ClipboardPaste, X, AlertTriangle,
-  ExternalLink, RefreshCw, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, CheckCircle2
+  ExternalLink, RefreshCw, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, CheckCircle2,
+  Bot, Clipboard, Loader2, Search, Building2, User, FileSearch
 } from 'lucide-react'
+
+// Portal roles grouped for the UI. Order = display order on /leads.
+const ROLE_GROUPS = [
+  { role: 'discovery',         label: 'Discovery',          desc: 'sources of new target addresses', Icon: Search },
+  { role: 'enrichment',        label: 'Permit Enrichment',  desc: 'look up permits for a known address', Icon: Building2 },
+  { role: 'property_research', label: 'Property Research',  desc: 'sales, ownership, folio', Icon: FileSearch },
+  { role: 'entity_research',   label: 'Entity Research',    desc: 'LLCs, officers, registered agents', Icon: User },
+]
 
 function formatDate(iso) {
   if (!iso) return 'never'
@@ -28,6 +38,78 @@ function StatusPill({ status }) {
   )
 }
 
+function PortalRow({ p, isFirst, latest, activeJobsCount, onRun }) {
+  const status = latest?.status || 'pending'
+  const isFailed = status === 'failed' || status === 'partial'
+  const missingCred = p.login_required && !p.credential_key
+  const auto = isAutoPortal(p.id)
+  // Best-effort running indicator. We don't currently track which
+  // portal each in-flight job covers.
+  const isRunning = activeJobsCount > 0
+
+  return (
+    <div className={`px-4 py-3 flex items-center gap-3 ${isFirst ? '' : 'border-t border-gray-100'} ${isFailed ? 'bg-red-50/30' : ''}`}>
+      <div className="flex items-center gap-2 shrink-0 w-6">
+        {p.login_required ? (
+          missingCred
+            ? <ShieldAlert size={14} className="text-red-500" />
+            : <ShieldCheck size={14} className="text-gray-400" />
+        ) : (
+          <Globe size={14} className="text-gray-300" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+          <span className="text-sm font-semibold text-gray-900 truncate">{p.name}</span>
+          <StatusPill status={status} />
+          {auto ? (
+            <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
+              <Bot size={8} /> AUTO
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100">
+              <Clipboard size={8} /> MANUAL
+            </span>
+          )}
+          {isRunning && auto && (
+            <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+              <Loader2 size={10} className="animate-spin" /> running
+            </span>
+          )}
+          {p.municipality && <span className="text-[10px] text-gray-400">{p.municipality}</span>}
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-gray-500">
+          <span>Last scan: {formatDate(latest?.scanned_at)}</span>
+          {latest?.permits_found > 0 && (
+            <span>{latest.permits_found} permits · {latest.new_permits || 0} new</span>
+          )}
+          {latest?.error_details && (
+            <span className="text-red-600 truncate max-w-md" title={latest.error_details}>
+              ⚠ {latest.error_details}
+            </span>
+          )}
+          {missingCred && <span className="text-red-600">⚠ no credential configured</span>}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        {p.url && (
+          <a href={p.url} target="_blank" rel="noreferrer" className="p-1.5 text-gray-400 hover:text-amber-600 rounded" title="Open portal">
+            <ExternalLink size={12} />
+          </a>
+        )}
+        <button
+          onClick={() => onRun(p)}
+          disabled={missingCred}
+          className="px-2 py-1 text-[10px] font-medium bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          title={missingCred ? 'Set credential first' : 'Scan only this portal'}
+        >
+          Scan
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function PortalScansSection() {
   const [portals, setPortals] = useState([])
   const [filters, setFilters] = useState({})
@@ -44,6 +126,11 @@ export default function PortalScansSection() {
   const [copied, setCopied] = useState(false)
   const [ingesting, setIngesting] = useState(false)
   const [expanded, setExpanded] = useState(true)
+  // activeJobs: { [jobId]: { status, kind, created_at } } — jobs we've
+  // queued from this session and are watching for completion
+  const [activeJobs, setActiveJobs] = useState({})
+  const [runnerHint, setRunnerHint] = useState(null)
+  const pollRef = useRef(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -63,9 +150,64 @@ export default function PortalScansSection() {
 
   useEffect(() => { refresh() }, [refresh])
 
+  // Poll agent_jobs for active portal_scan jobs queued from this session.
+  // When any flips to done/failed, refresh the portal status and clear
+  // it from the active set. The runner (node scripts/runner.js --daemon)
+  // is what actually processes these — the poll is just for UI feedback.
+  useEffect(() => {
+    if (Object.keys(activeJobs).length === 0) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      return
+    }
+    if (pollRef.current) return
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const jobs = await listJobs({ kind: 'portal_scan' })
+        const jobsById = {}
+        for (const j of jobs) jobsById[j.id] = j
+
+        let anyCompleted = false
+        const nextActive = { ...activeJobs }
+        for (const id of Object.keys(activeJobs)) {
+          const latest = jobsById[id]
+          if (!latest) continue
+          if (latest.status === 'done' || latest.status === 'failed' || latest.status === 'needs_review') {
+            delete nextActive[id]
+            anyCompleted = true
+          } else {
+            nextActive[id] = { status: latest.status, kind: latest.kind, created_at: latest.created_at }
+          }
+        }
+
+        if (anyCompleted || Object.keys(nextActive).length !== Object.keys(activeJobs).length) {
+          setActiveJobs(nextActive)
+          await refresh()
+        }
+      } catch (e) {
+        console.warn('Polling failed:', e)
+      }
+    }, 3000)
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [activeJobs, refresh])
+
   const enabledPortals = portals.filter(p => p.enabled)
   const scannablePortals = enabledPortals.filter(p => !p.login_required || p.credential_key)
   const missingCreds = enabledPortals.filter(p => p.login_required && !p.credential_key)
+
+  // Split enabled+scannable portals into auto (has a Playwright scraper
+  // registered) and manual (falls back to Claude-in-Chrome copy-paste)
+  const autoPortals = scannablePortals.filter(p => isAutoPortal(p.id))
+  const manualPortals = scannablePortals.filter(p => !isAutoPortal(p.id))
 
   // Summary counters for the header
   const counts = { success: 0, partial: 0, failed: 0, pending: 0 }
@@ -77,31 +219,73 @@ export default function PortalScansSection() {
     else counts.failed++
   }
 
+  /**
+   * Queue a scan. Splits the target portal list into "auto" (has a
+   * registered Playwright scraper in scripts/scrapers/) and "manual"
+   * (needs Claude-in-Chrome copy-paste).
+   *
+   * Auto portals: queue one job, surface it in activeJobs so the
+   *   polling loop watches for completion. Runner picks it up.
+   * Manual portals: queue one job AND generate the Claude-in-Chrome
+   *   prompt for the user to copy-paste, same as before.
+   *
+   * If the target list mixes auto and manual, we queue two separate
+   * jobs so the auto one can complete independently of the manual one.
+   */
   async function handleRun(portalsToScan) {
     if (!portalsToScan.length) return
+    setRunnerHint(null)
+
+    const auto = portalsToScan.filter(p => isAutoPortal(p.id))
+    const manual = portalsToScan.filter(p => !isAutoPortal(p.id))
+
     try {
-      const prompt = generateAgentPrompt('SCAN-ALL-PORTALS-001', {
-        portals: portalsToScan,
-        filters,
-      })
-      const job = await createJob({
-        kind: 'portal_scan',
-        priority: 3,
-        payload: {
-          portal_ids: portalsToScan.map(p => p.id),
-          portal_count: portalsToScan.length,
+      // Auto job — runner will process this one
+      if (auto.length > 0) {
+        const autoJob = await createJob({
+          kind: 'portal_scan',
+          priority: 3,
+          payload: {
+            portal_ids: auto.map(p => p.id),
+            portal_count: auto.length,
+            filters,
+            runtime: 'runner',
+          },
+        })
+        setActiveJobs(prev => ({ ...prev, [autoJob.id]: { status: 'queued', kind: 'portal_scan', created_at: autoJob.created_at } }))
+        setRunnerHint(
+          `Queued ${auto.length} auto portal${auto.length > 1 ? 's' : ''} for the runner. ` +
+          `Make sure \`node scripts/runner.js --daemon\` is running in another terminal — ` +
+          `the job will pick up within ~5 seconds and results will stream in here.`
+        )
+      }
+
+      // Manual job — user copy-pastes into Claude-in-Chrome
+      if (manual.length > 0) {
+        const prompt = generateAgentPrompt('SCAN-ALL-PORTALS-001', {
+          portals: manual,
           filters,
-        },
-      })
-      setGeneratedPrompt(prompt)
-      setRequestedPortals(portalsToScan)
-      setPromptJobId(job.id)
-      setPromptOpen(true)
-      setPasteOpen(false)
-      setIngestResult(null)
-      setPasteError(null)
+        })
+        const manualJob = await createJob({
+          kind: 'portal_scan',
+          priority: 3,
+          payload: {
+            portal_ids: manual.map(p => p.id),
+            portal_count: manual.length,
+            filters,
+            runtime: 'claude_in_chrome',
+          },
+        })
+        setGeneratedPrompt(prompt)
+        setRequestedPortals(manual)
+        setPromptJobId(manualJob.id)
+        setPromptOpen(true)
+        setPasteOpen(false)
+        setIngestResult(null)
+        setPasteError(null)
+      }
     } catch (e) {
-      setPasteError('Failed to build scan prompt: ' + e.message)
+      setPasteError('Failed to queue scan: ' + e.message)
     }
   }
 
@@ -219,6 +403,21 @@ export default function PortalScansSection() {
 
       {expanded && (
         <>
+          {/* Runner hint — shown after queuing an auto job */}
+          {runnerHint && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+              <div className="flex items-start gap-2">
+                <Bot size={14} className="text-green-600 mt-0.5 shrink-0" />
+                <div className="flex-1 text-[11px] text-green-800 leading-relaxed">
+                  {runnerHint}
+                </div>
+                <button onClick={() => setRunnerHint(null)} className="text-green-600 hover:text-green-800">
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Missing credentials warning */}
           {missingCreds.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
@@ -342,67 +541,28 @@ export default function PortalScansSection() {
               <p className="text-xs text-gray-500">No portals enabled. Enable portals in <a href="/settings" className="text-amber-600 hover:underline">Configuration → Portals</a>.</p>
             </div>
           ) : (
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-              {enabledPortals.map((p, i) => {
-                const latest = latestByPortal[p.id]
-                const status = latest?.status || 'pending'
-                const isFailed = status === 'failed' || status === 'partial'
-                const missingCred = p.login_required && !p.credential_key
+            <div className="space-y-4">
+              {ROLE_GROUPS.map(group => {
+                const portalsInGroup = enabledPortals.filter(p => (p.role || 'enrichment') === group.role)
+                if (portalsInGroup.length === 0) return null
                 return (
-                  <div
-                    key={p.id}
-                    className={`px-4 py-3 flex items-center gap-3 ${i > 0 ? 'border-t border-gray-100' : ''} ${isFailed ? 'bg-red-50/30' : ''}`}
-                  >
-                    <div className="flex items-center gap-2 shrink-0 w-6">
-                      {p.login_required ? (
-                        missingCred
-                          ? <ShieldAlert size={14} className="text-red-500" title="Missing credential" />
-                          : <ShieldCheck size={14} className="text-gray-400" title={`Login: ${p.credential_key}`} />
-                      ) : (
-                        <Globe size={14} className="text-gray-300" />
-                      )}
+                  <div key={group.role}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <group.Icon size={12} className="text-gray-400" />
+                      <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{group.label}</h3>
+                      <span className="text-[10px] text-gray-400 font-normal">{group.desc}</span>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                        <span className="text-sm font-semibold text-gray-900 truncate">{p.name}</span>
-                        <StatusPill status={status} />
-                        {p.municipality && <span className="text-[10px] text-gray-400">{p.municipality}</span>}
-                      </div>
-                      <div className="flex items-center gap-3 text-[11px] text-gray-500">
-                        <span>Last scan: {formatDate(latest?.scanned_at)}</span>
-                        {latest?.permits_found > 0 && (
-                          <span>{latest.permits_found} permits · {latest.new_permits || 0} new</span>
-                        )}
-                        {latest?.error_details && (
-                          <span className="text-red-600 truncate max-w-md" title={latest.error_details}>
-                            ⚠ {latest.error_details}
-                          </span>
-                        )}
-                        {missingCred && (
-                          <span className="text-red-600">⚠ no credential configured</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {p.url && (
-                        <a
-                          href={p.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1.5 text-gray-400 hover:text-amber-600 rounded"
-                          title="Open portal"
-                        >
-                          <ExternalLink size={12} />
-                        </a>
-                      )}
-                      <button
-                        onClick={() => handleRunOne(p)}
-                        disabled={missingCred}
-                        className="px-2 py-1 text-[10px] font-medium bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={missingCred ? 'Set credential first' : 'Scan only this portal'}
-                      >
-                        Scan
-                      </button>
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      {portalsInGroup.map((p, i) => (
+                        <PortalRow
+                          key={p.id}
+                          p={p}
+                          isFirst={i === 0}
+                          latest={latestByPortal[p.id]}
+                          activeJobsCount={Object.keys(activeJobs).length}
+                          onRun={handleRunOne}
+                        />
+                      ))}
                     </div>
                   </div>
                 )

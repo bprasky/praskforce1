@@ -4,16 +4,35 @@
 const CONFIG_KEY = 'pf1_config'
 
 export const DEFAULT_CONFIG = {
-  // Portals to scan for permits
+  // Portals to scan for permits and property data.
+  //
+  // Each portal has a `role` that determines how it's used:
+  //   - discovery: source of NEW addresses / recent transactions. Runs
+  //     on a schedule and surfaces candidates for the pipeline.
+  //   - enrichment: lookup tool. Given a known address, returns
+  //     permit/ownership data. Runs on-demand when you add a target
+  //     address, not on a schedule.
+  //   - entity_research: owner/LLC research (Sunbiz etc.). Runs when
+  //     you want to find the human behind an entity.
+  //   - property_research: sales history, valuation, folio (Property
+  //     Appraiser etc.). Runs alongside enrichment.
   portals: [
-    { id: 'mb_civic', name: 'Miami Beach Civic Access', url: 'https://eservices.miamibeachfl.gov/css/', municipality: 'Miami Beach', login_required: true, credential_key: 'Miami Beach Civic Access', enabled: true, last_scan: null },
-    { id: 'cg_eden', name: 'Coral Gables EdenWeb', url: 'https://edenweb.coralgables.com/Default.asp?Build=PM.pmPermit.SearchForm&utask=normalview', municipality: 'Coral Gables', login_required: false, credential_key: null, enabled: true, last_scan: null },
-    { id: 'miami_ibuild', name: 'City of Miami iBuild', url: 'https://www.miami.gov/Permits-Construction/Permitting-Resources/View-Permit-HistoryPermit-Search', municipality: 'City of Miami', login_required: true, credential_key: 'City of Miami iBuild', enabled: true, last_scan: null },
-    { id: 'dade_county', name: 'Miami-Dade County', url: 'https://www.miamidade.gov/permits/', municipality: 'Miami-Dade County', login_required: false, credential_key: null, enabled: true, last_scan: null },
-    { id: 'north_miami', name: 'North Miami Building Dept', url: 'https://www.northmiamifl.gov/158/Forms-Permits', municipality: 'North Miami', login_required: false, credential_key: null, enabled: false, last_scan: null },
-    { id: 'sunbiz', name: 'Florida Sunbiz', url: 'https://search.sunbiz.org/Inquiry/CorporationSearch/ByName', municipality: null, login_required: false, credential_key: null, enabled: true, last_scan: null },
-    { id: 'property_appraiser', name: 'Miami-Dade Property Appraiser', url: 'https://www.miamidade.gov/pa/property_search.asp', municipality: null, login_required: false, credential_key: null, enabled: true, last_scan: null },
-    { id: 'property_reports', name: 'PropertyReports.us', url: 'https://www.propertyreports.us/map/miami-fl', municipality: null, login_required: true, credential_key: 'PropertyReports.us', enabled: true, last_scan: null },
+    // ── Discovery sources ─────────────────────────────────────────
+    { id: 'property_reports', name: 'PropertyReports.us',           role: 'discovery',         url: 'https://www.propertyreports.us/',                                                                            municipality: null,                login_required: true,  credential_key: 'PropertyReports.us',  enabled: true,  last_scan: null },
+    { id: 'zillow_sold',      name: 'Zillow Recently Sold (Miami)', role: 'discovery',         url: 'https://www.zillow.com/homes/recently_sold/Miami-FL/',                                                       municipality: null,                login_required: false, credential_key: null,                  enabled: true,  last_scan: null },
+
+    // ── Enrichment (permit lookup by known address) ───────────────
+    { id: 'mb_civic',         name: 'Miami Beach Civic Access',     role: 'enrichment',        url: 'https://energovcss.miamibeachfl.gov/css/',                                                                   municipality: 'Miami Beach',       login_required: true,  credential_key: 'Miami Beach Civic Access', enabled: true,  last_scan: null },
+    { id: 'cg_eden',          name: 'Coral Gables EdenWeb',         role: 'enrichment',        url: 'https://edenweb.coralgables.com/Default.asp?Build=PM.pmPermit.SearchForm&utask=normalview',                 municipality: 'Coral Gables',      login_required: false, credential_key: null,                  enabled: true,  last_scan: null },
+    { id: 'miami_ibuild',     name: 'City of Miami iBuild',         role: 'enrichment',        url: 'https://www.miami.gov/Permits-Construction/Permitting-Resources/View-Permit-HistoryPermit-Search',          municipality: 'City of Miami',     login_required: true,  credential_key: 'City of Miami iBuild', enabled: true,  last_scan: null },
+    { id: 'dade_county',      name: 'Miami-Dade County',            role: 'enrichment',        url: 'https://www.miamidade.gov/Apps/RER/ePermittingMenu',                                                         municipality: 'Miami-Dade County', login_required: false, credential_key: null,                  enabled: true,  last_scan: null },
+    { id: 'north_miami',      name: 'North Miami Building Dept',    role: 'enrichment',        url: 'https://www.northmiamifl.gov/158/Forms-Permits',                                                             municipality: 'North Miami',       login_required: false, credential_key: null,                  enabled: false, last_scan: null },
+
+    // ── Property research (sales, ownership, folio) ───────────────
+    { id: 'property_appraiser', name: 'Miami-Dade Property Appraiser', role: 'property_research', url: 'https://www.miamidade.gov/pa/property_search.asp',                                                       municipality: null,                login_required: false, credential_key: null,                  enabled: true,  last_scan: null },
+
+    // ── Entity research (LLC / owner identification) ──────────────
+    { id: 'sunbiz',           name: 'Florida Sunbiz',               role: 'entity_research',   url: 'https://search.sunbiz.org/Inquiry/CorporationSearch/ByName',                                                 municipality: null,                login_required: false, credential_key: null,                  enabled: true,  last_scan: null },
   ],
 
   // Scan filters
@@ -96,6 +115,11 @@ export const DEFAULT_CONFIG = {
   supabase: {
     url: '',
     anon_key: '',
+    // Service role key — bypasses RLS, needed by the Node runner.
+    // Never exposed to the browser at runtime (never prefixed with
+    // NEXT_PUBLIC_). Only used by the env export flow to write
+    // SUPABASE_SERVICE_ROLE_KEY to .env.local.
+    service_role_key: '',
   },
 }
 

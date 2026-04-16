@@ -608,6 +608,9 @@ function SupabaseTab({ config, setConfig }) {
         <Input label="Anon / Public Key" value={sb.anon_key || ''} onChange={v => setSB('anon_key', v.trim())} placeholder="eyJhbGciOiJIUzI1NiIs..." type="password" mono />
         <p className="text-[10px] text-gray-400 -mt-2 mb-3">Supabase → Settings → API → Project API keys → copy <span className="font-semibold">anon public</span> (not service_role). Starts with "eyJ".</p>
 
+        <Input label="Service Role Key (for runner only)" value={sb.service_role_key || ''} onChange={v => setSB('service_role_key', v.trim())} placeholder="eyJhbGciOiJIUzI1NiIs..." type="password" mono />
+        <p className="text-[10px] text-gray-400 -mt-2 mb-3">Copy <span className="font-semibold">service_role</span> (secret) from the same page. Only used when exporting to .env.local for the Node runner — never sent from the browser to Supabase. Leave blank if you're not running the runner.</p>
+
         <button onClick={handleTest} disabled={testing} className={`mt-2 px-4 py-2 rounded-lg text-xs font-medium flex items-center gap-2 ${testing ? 'bg-gray-200 text-gray-500' : 'bg-amber-500 text-white hover:bg-amber-600'}`}>
           {testing ? 'Testing...' : 'Test Connection'}
         </button>

@@ -1,11 +1,11 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { DEMO_PROPERTIES } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import SocialSignalsSection from '@/components/SocialSignalsSection'
 import PortalScansSection from '@/components/PortalScansSection'
 import RecentPermitsSection from '@/components/RecentPermitsSection'
-import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock } from 'lucide-react'
+import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock, Database } from 'lucide-react'
 
 const PRI = {
   highest: { label: 'HIGHEST', bg: 'bg-red-600', text: 'text-white', dot: 'bg-red-500' },
@@ -110,6 +110,18 @@ export default function Dashboard() {
   const [priFil, setPriFil] = useState('all')
   const [statFil, setStatFil] = useState('all')
   const [openId, setOpenId] = useState(null)
+  const [dbConnected, setDbConnected] = useState(false)
+
+  // Keep the header badge in sync with actual Supabase connection state.
+  // Checks env vars + stored config — same logic as the sidebar footer.
+  useEffect(() => {
+    try {
+      const config = JSON.parse(localStorage.getItem('pf1_config') || '{}')
+      const hasEnv = !!process.env.NEXT_PUBLIC_SUPABASE_URL
+      const hasConfig = !!(config.supabase?.url && config.supabase?.anon_key)
+      setDbConnected(hasEnv || hasConfig)
+    } catch {}
+  }, [])
 
   const props = DEMO_PROPERTIES
   const filtered = useMemo(() =>
@@ -138,7 +150,15 @@ export default function Dashboard() {
             <h1 className="text-lg font-bold text-gray-900">Leads</h1>
             <p className="text-xs text-gray-500">Permit activity & social signals — ranked by compatibility score</p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-400"><Clock size={12} /> Demo Mode</div>
+          {dbConnected ? (
+            <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
+              <Database size={12} /> DB Connected
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+              <Clock size={12} /> Demo Mode
+            </div>
+          )}
         </header>
 
         <div className="p-6">
