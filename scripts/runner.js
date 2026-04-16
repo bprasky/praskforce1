@@ -60,6 +60,53 @@ const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false },
 })
 
+// ── Task tree helpers (server-side, Supabase direct) ────────────────
+//
+// The tasks.js module in src/lib/ mixes Supabase and localStorage, and
+// localStorage doesn't exist in a Node process. These helpers write
+// directly to Supabase using the service-role client so we don't have
+// to import the browser-oriented lib code.
+
+async function createAgentOrigin({ sb, title, sourceAgent, rawContent, metadata = {}, propertyId = null, accountId = null }) {
+  const { data, error } = await sb
+    .from('task_origins')
+    .insert({
+      origin_type: 'agent_scan',
+      title,
+      raw_content: rawContent || null,
+      source_agent: sourceAgent,
+      property_id: propertyId,
+      account_id: accountId,
+      metadata,
+    })
+    .select('id')
+    .single()
+  if (error) throw new Error(`createAgentOrigin failed: ${error.message}`)
+  return data.id
+}
+
+async function createAgentTask({ sb, originId, originType = 'agent_scan', def }) {
+  const { error } = await sb.from('tasks').insert({
+    title: def.title || null,
+    description: def.description || null,
+    type: def.type || 'CUSTOM',
+    origin_id: originId,
+    origin_type: originType,
+    resolution: 'open',
+    depth: 0,
+    contact: def.contact || null,
+    property: def.property || null,
+    materials: def.materials || null,
+    deadline: def.deadline || null,
+    priority: def.priority || 'medium',
+    status: 'ready',
+    source: 'agent_extracted',
+    value: def.value ?? null,
+    quote_ref: def.quoteRef || null,
+  })
+  if (error) throw new Error(`createAgentTask failed: ${error.message}`)
+}
+
 // ── Per-kind handlers ────────────────────────────────────────────────
 
 /**
@@ -198,6 +245,72 @@ async function handlePortalScan(job) {
     const { error: permErr } = await sb.from('permits').insert(insertRows)
     if (permErr) console.error('Failed to insert permits:', permErr.message)
     else console.log(`    inserted ${insertRows.length} permit rows`)
+  }
+
+  // Spawn a task tree for the portal scan. The origin captures which
+  // portals were scanned and how each one fared; each new permit
+  // becomes a RESEARCH task so Brad has one action item per signal.
+  if (portalResults.length > 0) {
+    try {
+      const originId = await createAgentOrigin({
+        sb,
+        title: `Portal scan — ${new Date().toISOString().slice(0, 10)}`,
+        sourceAgent: 'portal_scan',
+        rawContent: JSON.stringify({ portalResults, permit_count: allPermits.length }, null, 2),
+        metadata: {
+          portal_count: portalResults.length,
+          permit_count: allPermits.length,
+          succeeded: portalResults.filter(r => r.status === 'success').length,
+          failed: portalResults.filter(r => r.status === 'failed').length,
+        },
+      })
+
+      // Most interesting: one RESEARCH task per newly-seen permit so
+      // the user can triage them individually on the tree view.
+      const researchDefs = allPermits.map(p => ({
+        type: 'RESEARCH',
+        title: `Investigate permit ${p.permit_number || '(no number)'} at ${p.address || 'unknown address'}`,
+        description: [
+          p.permit_type ? `Type: ${p.permit_type}` : null,
+          p.permit_status ? `Status: ${p.permit_status}` : null,
+          p.valuation ? `Valuation: $${Number(p.valuation).toLocaleString()}` : null,
+          p.contractor_name ? `Contractor: ${p.contractor_name}` : null,
+          p.scope_description ? `Scope: ${p.scope_description}` : null,
+        ].filter(Boolean).join(' · '),
+        property: p.address || null,
+        materials: null,
+        priority: (p.valuation || 0) >= 1_000_000 ? 'high' : 'medium',
+      }))
+
+      // For failed portals, spawn a FOLLOW_UP admin task — if a portal
+      // keeps failing we want that visible in the tree until fixed.
+      const failedPortals = portalResults.filter(r => r.status === 'failed')
+      const failureDefs = failedPortals.map(r => ({
+        type: 'ADMIN',
+        title: `Fix failed portal: ${r.portal_id}`,
+        description: r.error || 'Scraper errored without a message',
+        priority: 'high',
+      }))
+
+      const allDefs = [...researchDefs, ...failureDefs]
+      if (allDefs.length === 0) {
+        allDefs.push({
+          type: 'CRM_UPDATE',
+          title: 'Portal scan complete — no new permits',
+          description: `${portalResults.length} portal(s) scanned, nothing actionable found.`,
+          priority: 'low',
+        })
+      }
+
+      let spawnedCount = 0
+      for (const def of allDefs) {
+        await createAgentTask({ sb, originId, originType: 'agent_scan', def })
+        spawnedCount++
+      }
+      console.log(`    spawned origin ${originId} + ${spawnedCount} task(s)`)
+    } catch (e) {
+      console.error('Failed to spawn task tree from scan:', e.message)
+    }
   }
 
   return {

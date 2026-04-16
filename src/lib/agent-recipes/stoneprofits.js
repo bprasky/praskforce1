@@ -176,9 +176,50 @@ async function extractQuotesWithVision({ page, log, saveScreenshot, extractWithC
   return arr
 }
 
+// Task-tree spawning policy for this recipe.
+// Called by the agent engine after execute() succeeds. Returns an
+// array of task defs that become children of the auto-created origin.
+//
+// For SP-QUOTES we spawn one FOLLOW_UP per extracted quote — a
+// lightweight "check status / update CRM" nudge. Quotes already in
+// terminal states (Accepted with a recent date, Expired) get a
+// CRM_UPDATE instead of a FOLLOW_UP so the task category reflects the
+// real work.
+function spawnTasks(result) {
+  const items = Array.isArray(result?.items) ? result.items : []
+  if (items.length === 0) return []
+
+  return items.map(q => {
+    const status = (q.status || '').toLowerCase()
+    const isTerminal = ['accepted', 'expired', 'cancelled', 'closed'].includes(status)
+    const type = isTerminal ? 'CRM_UPDATE' : 'FOLLOW_UP'
+    const title = isTerminal
+      ? `Record ${q.status} status for ${q.quote_number || 'quote'}`
+      : `Follow up on ${q.quote_number || 'quote'} (${q.customer || 'unknown customer'})`
+    return {
+      type,
+      title,
+      description: [
+        q.quote_number ? `Quote ${q.quote_number}` : null,
+        q.customer ? `for ${q.customer}` : null,
+        q.project ? `— ${q.project}` : null,
+        q.total ? `— $${Number(q.total).toLocaleString()}` : null,
+        q.status ? `(${q.status})` : null,
+      ].filter(Boolean).join(' '),
+      contact: q.contact || null,
+      property: q.project || null,
+      materials: Array.isArray(q.materials) ? q.materials.join(', ') : null,
+      priority: isTerminal ? 'low' : 'medium',
+      value: q.total || null,
+      quoteRef: q.quote_number || null,
+    }
+  })
+}
+
 export default {
   id: 'SP-QUOTES-001',
   label: 'Extract StoneProfits Quotes',
+  spawnTasks,
   async execute(ctx) {
     const { browser, log } = ctx
     const page = await browser.newPage()
