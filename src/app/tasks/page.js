@@ -26,7 +26,8 @@ import TaskResolutionPanel from '@/components/TaskResolutionPanel'
 import TaskChat from '@/components/TaskChat'
 import OutlookImportPanel from '@/components/OutlookImportPanel'
 import TasksMatrix from '@/components/TasksMatrix'
-import { Plus, X, Send, Play, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter, Sparkles, MessageCircle, TrendingUp, Mail, LayoutGrid, List, Users, Tag } from 'lucide-react'
+import TaskTreeView from '@/components/TaskTreeView'
+import { Plus, X, Send, Play, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter, Sparkles, MessageCircle, TrendingUp, Mail, LayoutGrid, List, Users, Tag, Network } from 'lucide-react'
 
 function formatDate(iso) {
   if (!iso) return ''
@@ -65,7 +66,7 @@ export default function TasksPage() {
 
   // View / sort / group state for the matrix layout. Persisted to
   // localStorage so Brad's preferences stick across sessions.
-  const [view, setView] = useState('cards')      // 'cards' | 'matrix'
+  const [view, setView] = useState('cards')      // 'cards' | 'matrix' | 'tree'
   const [groupBy, setGroupBy] = useState('none') // 'none' | 'contact' | 'type' | 'source'
   const [typeFilter, setTypeFilter] = useState('all')
   const [showOutlook, setShowOutlook] = useState(false)
@@ -763,7 +764,7 @@ export default function TasksPage() {
               </select>
             </div>
 
-            {/* View toggle: cards (current) vs matrix (sortable table) */}
+            {/* View toggle: cards | matrix | tree */}
             <div className="ml-auto flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden">
               <button
                 onClick={() => setView('cards')}
@@ -783,11 +784,22 @@ export default function TasksPage() {
               >
                 <LayoutGrid size={12} /> Matrix
               </button>
+              <button
+                onClick={() => setView('tree')}
+                className={`px-3 py-1 text-xs font-medium flex items-center gap-1 ${
+                  view === 'tree' ? 'bg-amber-500 text-white' : 'text-gray-600 hover:bg-gray-50'
+                }`}
+                title="Tree view — grouped by origin with full lineage"
+              >
+                <Network size={12} /> Tree
+              </button>
             </div>
           </div>
 
-          {/* Task list — matrix or cards layout */}
-          {view === 'matrix' ? (
+          {/* Task list — matrix, cards, or tree layout */}
+          {view === 'tree' ? (
+            <TaskTreeView onRefresh={() => setTasks(getTasks())} />
+          ) : view === 'matrix' ? (
             <TasksMatrix
               tasks={filtered}
               expandedId={expandedId}
