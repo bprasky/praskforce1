@@ -3,7 +3,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import Sidebar from '@/components/Sidebar'
 import { listFirms, listFirmContacts, DEMO_ACCOUNTS, deleteFirm } from '@/lib/accounts'
 import { listQuotes, QUOTE_STATUS } from '@/lib/quotes'
-import { ChevronDown, ChevronRight, Building2, Users, Mail, Phone, Instagram, Linkedin, Search, ExternalLink, FileText, Upload, Trash2, RefreshCw } from 'lucide-react'
+import { getAccountTreeRollup } from '@/lib/task-tree-stats'
+import Link from 'next/link'
+import { ChevronDown, ChevronRight, Building2, Users, Mail, Phone, Instagram, Linkedin, Search, ExternalLink, FileText, Upload, Trash2, RefreshCw, Network, Trophy, TrendingDown } from 'lucide-react'
 
 function fmtMoney(n) {
   if (n == null) return '—'
@@ -21,6 +23,7 @@ export default function AccountsPage() {
   const [firms, setFirms] = useState([])
   const [contactsByFirm, setContactsByFirm] = useState({})
   const [quotesByFirm, setQuotesByFirm] = useState({})
+  const [treeRollup, setTreeRollup] = useState({})  // { [accountId]: { totalTrees, treesWon, ... } }
   const [openId, setOpenId] = useState(null)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -28,11 +31,13 @@ export default function AccountsPage() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const [f, allContacts, allQuotes] = await Promise.all([
+      const [f, allContacts, allQuotes, rollup] = await Promise.all([
         listFirms(),
         listFirmContacts(),
         listQuotes(),
+        getAccountTreeRollup(),
       ])
+      setTreeRollup(rollup || {})
       setFirms(f || [])
       const cMap = {}
       for (const c of allContacts || []) {
@@ -175,6 +180,7 @@ export default function AccountsPage() {
             const contacts = contactsByFirm[firm.id] || []
             const quotes = quotesByFirm[firm.id] || []
             const firmValue = quotes.reduce((s, q) => s + (q.total_value || 0), 0)
+            const tree = treeRollup[firm.id]
             return (
               <div key={firm.id} className="bg-white rounded-lg border border-gray-200 mb-3 overflow-hidden">
                 <div
@@ -188,7 +194,7 @@ export default function AccountsPage() {
                     </div>
                     <div className="min-w-0">
                       <div className="font-semibold text-gray-900 truncate">{firm.name}</div>
-                      <div className="text-xs text-gray-500 flex items-center gap-2 mt-0.5">
+                      <div className="text-xs text-gray-500 flex items-center gap-2 mt-0.5 flex-wrap">
                         {firm.type && <span className="capitalize">{firm.type}</span>}
                         {firm.city && <><span className="text-gray-300">·</span><span>{firm.city}{firm.state ? `, ${firm.state}` : ''}</span></>}
                         <span className="text-gray-300">·</span>
@@ -197,6 +203,31 @@ export default function AccountsPage() {
                           <>
                             <span className="text-gray-300">·</span>
                             <span>{quotes.length} quote{quotes.length !== 1 ? 's' : ''}</span>
+                          </>
+                        )}
+                        {tree && tree.totalTrees > 0 && (
+                          <>
+                            <span className="text-gray-300">·</span>
+                            <Link
+                              href={`/tasks?view=tree&account=${encodeURIComponent(firm.id)}`}
+                              onClick={e => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-900"
+                              title="View task trees for this firm"
+                            >
+                              <Network size={10} />
+                              {tree.totalTrees} tree{tree.totalTrees !== 1 ? 's' : ''}
+                              {tree.activeTrees > 0 && <span className="text-blue-700 ml-1">({tree.activeTrees} active)</span>}
+                            </Link>
+                            {tree.treesWon > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-green-700">
+                                <Trophy size={10} /> {tree.treesWon}
+                              </span>
+                            )}
+                            {tree.treesLost > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-red-600">
+                                <TrendingDown size={10} /> {tree.treesLost}
+                              </span>
+                            )}
                           </>
                         )}
                       </div>
