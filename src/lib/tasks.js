@@ -180,7 +180,48 @@ const TASK_TYPE_GUIDE = `- QUOTE: Create a NEW quote in StoneProfits.
 - CRM_UPDATE: Update contact info, project status, or notes in StoneProfits.
 - CUSTOM: Anything that doesn't fit the above.`
 
-export function buildParsePrompt(notes, contactName, propertyAddress) {
+export function buildParsePrompt(notes, contactName, propertyAddress, lineageContext = null) {
+  // lineageContext (optional) lets Claude link new tasks into an
+  // existing tree instead of always creating a new root. Shape:
+  //   {
+  //     openTasks: [{ id, type, description, account_id, property_id, days_old }, ...],
+  //     knownAccounts: [{ id, name, aka: [...] }, ...],
+  //     knownProperties: [{ id, address, account_id }, ...],
+  //   }
+  // The lineage block is only included when at least one list is
+  // non-empty so the prompt stays small for first-time users.
+  const hasLineage = lineageContext && (
+    (lineageContext.openTasks || []).length > 0 ||
+    (lineageContext.knownAccounts || []).length > 0 ||
+    (lineageContext.knownProperties || []).length > 0
+  )
+
+  const lineageBlock = hasLineage ? `
+
+LINEAGE CONTEXT (match against this before creating tasks):
+
+OPEN TASKS FROM EXISTING TREES (these are candidates for "suggested_parent_task_id"):
+${(lineageContext.openTasks || []).map(t =>
+  `[${t.id}] ${t.type}: ${t.description || ''}${t.account_id ? ` (account: ${t.account_id})` : ''}${t.property_id ? ` (property: ${t.property_id})` : ''}${t.days_old != null ? ` — ${t.days_old}d old` : ''}`
+).join('\n') || '(none)'}
+
+KNOWN ACCOUNTS:
+${(lineageContext.knownAccounts || []).map(a =>
+  `[${a.id}] ${a.name}${a.aka && a.aka.length ? ` (aka ${a.aka.join(', ')})` : ''}`
+).join('\n') || '(none)'}
+
+KNOWN PROPERTIES:
+${(lineageContext.knownProperties || []).map(p =>
+  `[${p.id}] ${p.address}${p.account_id ? ` — owner account ${p.account_id}` : ''}`
+).join('\n') || '(none)'}
+
+For each task you generate below, INCLUDE these additional fields (each is optional — use null if you can't determine it):
+- "suggested_parent_task_id": the UUID of an existing OPEN task this should become a CHILD of, or null if it's a brand-new root task. Only suggest a parent when the new task is a clear continuation or direct follow-up of that existing task (NOT just related to the same client).
+- "property_id": UUID from KNOWN PROPERTIES above if the task is clearly about that property, else null.
+- "account_id": UUID from KNOWN ACCOUNTS above if the task is clearly about that account, else null.
+
+CRITICAL: if you're not confident about a match, leave it null. Wrong links are worse than missing links — they pollute the tree and hide real patterns.` : ''
+
   return `You are a sales operations assistant for a natural stone importer. Parse these meeting notes into structured action items.
 
 MEETING CONTEXT:
@@ -188,7 +229,7 @@ ${contactName ? `Contact: ${contactName}` : ''}
 ${propertyAddress ? `Property: ${propertyAddress}` : ''}
 
 MEETING NOTES:
-${notes}
+${notes}${lineageBlock}
 
 Extract every actionable item. For each, return a JSON object with:
 - "type": one of QUOTE, QUOTE_ADJUSTMENT, FOLLOW_UP, BOOK_MEETING, INTRO, EMAIL, SAMPLE_SEND, PRICING, RESEARCH, ADMIN, SCHEDULE, CAPTURE, CRM_UPDATE, CUSTOM
@@ -200,7 +241,10 @@ Extract every actionable item. For each, return a JSON object with:
 - "priority": "high", "medium", or "low"
 - "value": estimated dollar value of the task if it's tied to a quote/sale (number, no commas), or null
 - "quote_ref": StoneProfits quote number if explicitly mentioned (e.g. "Q-2024-1337"), or null
-- "crm_data": any data that should be recorded in the CRM (contact info updates, project status changes, material preferences, notes)
+- "crm_data": any data that should be recorded in the CRM (contact info updates, project status changes, material preferences, notes)${hasLineage ? `
+- "suggested_parent_task_id": see LINEAGE CONTEXT above (nullable)
+- "property_id": see LINEAGE CONTEXT above (nullable)
+- "account_id": see LINEAGE CONTEXT above (nullable)` : ''}
 
 TASK TYPE GUIDE:
 ${TASK_TYPE_GUIDE}
@@ -259,4 +303,516 @@ Respond with ONLY a JSON object (no other text, no markdown):
 
 TASK TYPE GUIDE:
 ${TASK_TYPE_GUIDE}`
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TASK TREE & LINEAGE
+// ═══════════════════════════════════════════════════════════════════
+//
+// Every task tree starts from an `origin` (meeting notes, agent scan,
+// manual add, etc). Tasks have parent/child relationships. Tasks can
+// resolve to outcomes (won, lost, stale, merged, deferred). The shape
+// of a completed tree is a signal we can analyze for patterns.
+//
+// Storage: Supabase when connected, localStorage fallback. Same pattern
+// as the rest of this codebase. The SQL schema is in
+// supabase/schema-task-tree.sql — apply that before the Supabase path
+// will work.
+
+import { getSupabase as getSupabaseClient } from '@/lib/supabase'
+
+const LS_ORIGINS = 'pf1_task_origins'
+
+export const ORIGIN_TYPES = {
+  meeting_notes: { label: 'Meeting Notes', icon: '📝', color: 'text-amber-700', bg: 'bg-amber-50' },
+  agent_scan:    { label: 'Agent Scan',    icon: '🤖', color: 'text-blue-700',  bg: 'bg-blue-50' },
+  manual:        { label: 'Manual',        icon: '✋', color: 'text-gray-600',  bg: 'bg-gray-100' },
+  referral:      { label: 'Referral',      icon: '👥', color: 'text-purple-700', bg: 'bg-purple-50' },
+  permit_hit:    { label: 'Permit Hit',    icon: '🏗️', color: 'text-orange-700', bg: 'bg-orange-50' },
+  social_signal: { label: 'Social Signal', icon: '📱', color: 'text-pink-700',  bg: 'bg-pink-50' },
+}
+
+export const RESOLUTIONS = {
+  open:     { label: 'Open',     color: 'text-blue-700',   bg: 'bg-blue-50',   border: 'border-blue-200' },
+  won:      { label: 'Won',      color: 'text-green-700',  bg: 'bg-green-50',  border: 'border-green-200' },
+  lost:     { label: 'Lost',     color: 'text-red-700',    bg: 'bg-red-50',    border: 'border-red-200' },
+  stale:    { label: 'Stale',    color: 'text-gray-600',   bg: 'bg-gray-100',  border: 'border-gray-200' },
+  merged:   { label: 'Merged',   color: 'text-purple-700', bg: 'bg-purple-50', border: 'border-purple-200' },
+  deferred: { label: 'Deferred', color: 'text-yellow-700', bg: 'bg-yellow-50', border: 'border-yellow-200' },
+}
+
+// ── localStorage fallbacks for origins + lineage ─────────────────────
+
+function lsGetOrigins() {
+  if (typeof window === 'undefined') return []
+  try { return JSON.parse(localStorage.getItem(LS_ORIGINS) || '[]') } catch { return [] }
+}
+function lsSaveOrigins(list) {
+  localStorage.setItem(LS_ORIGINS, JSON.stringify(list))
+}
+
+// ── Origins ──────────────────────────────────────────────────────────
+
+/**
+ * Create a task origin — the event that spawned a tree.
+ *
+ * @param {Object} input
+ * @param {string} input.originType - 'meeting_notes' | 'agent_scan' | 'manual' | 'referral' | 'permit_hit' | 'social_signal'
+ * @param {string} input.title - short human label ("Galbut meeting 4/10")
+ * @param {string} [input.rawContent] - original text/output, for audit
+ * @param {string} [input.sourceAgent] - agent task id if applicable
+ * @param {string} [input.propertyId]
+ * @param {string} [input.accountId]
+ * @param {Object} [input.metadata]
+ * @returns {Promise<Object>} the created origin record
+ */
+export async function createOrigin({
+  originType,
+  title,
+  rawContent = null,
+  sourceAgent = null,
+  propertyId = null,
+  accountId = null,
+  metadata = {},
+}) {
+  if (!originType) throw new Error('createOrigin: originType is required')
+  if (!title) throw new Error('createOrigin: title is required')
+
+  const record = {
+    origin_type: originType,
+    title,
+    raw_content: rawContent,
+    source_agent: sourceAgent,
+    property_id: propertyId,
+    account_id: accountId,
+    metadata,
+    created_at: new Date().toISOString(),
+  }
+
+  const sb = getSupabaseClient()
+  if (sb) {
+    try {
+      const { data, error } = await sb.from('task_origins').insert(record).select().single()
+      if (error) throw error
+      return data
+    } catch (e) {
+      console.warn('Supabase createOrigin failed, falling back to localStorage', e)
+    }
+  }
+
+  const full = { id: `orig_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, ...record }
+  lsSaveOrigins([full, ...lsGetOrigins()])
+  return full
+}
+
+export async function listOrigins(filter = {}) {
+  const sb = getSupabaseClient()
+  if (sb) {
+    try {
+      let q = sb.from('task_origins').select('*').order('created_at', { ascending: false })
+      if (filter.originType) q = q.eq('origin_type', filter.originType)
+      if (filter.accountId) q = q.eq('account_id', filter.accountId)
+      if (filter.propertyId) q = q.eq('property_id', filter.propertyId)
+      const { data, error } = await q
+      if (error) throw error
+      return data || []
+    } catch (e) {
+      console.warn('Supabase listOrigins failed, falling back to localStorage', e)
+    }
+  }
+  let list = lsGetOrigins()
+  if (filter.originType) list = list.filter(o => o.origin_type === filter.originType)
+  if (filter.accountId) list = list.filter(o => o.account_id === filter.accountId)
+  if (filter.propertyId) list = list.filter(o => o.property_id === filter.propertyId)
+  return list
+}
+
+// ── Core lineage task operations ─────────────────────────────────────
+
+/**
+ * Create a task with full lineage metadata. Handles depth derivation
+ * and origin inheritance from the parent. All new tree-aware call sites
+ * should use this instead of addTask().
+ *
+ * @param {Object} input
+ * @param {string} [input.title]
+ * @param {string} [input.description]
+ * @param {string} input.type - TASK_TYPES id (spec calls this "category")
+ * @param {string} [input.parentTaskId]
+ * @param {string} [input.originId] - required if parentTaskId is null
+ * @param {string} [input.originType]
+ * @param {string} [input.propertyId]
+ * @param {string} [input.accountId]
+ * @param {string} [input.pipelineDealId]
+ * @param {string} [input.contact]
+ * @param {string} [input.property]
+ * @param {string} [input.materials]
+ * @param {string} [input.deadline]
+ * @param {string} [input.priority]
+ * @param {string} [input.status]
+ * @param {string} [input.source]
+ * @param {number} [input.value]
+ * @param {string} [input.quoteRef]
+ * @param {Object} [input.crmData]
+ */
+export async function createTaskWithLineage(input) {
+  const {
+    title = null,
+    description = null,
+    type = 'CUSTOM',
+    parentTaskId = null,
+    propertyId = null,
+    accountId = null,
+    pipelineDealId = null,
+    contact = null,
+    property = null,
+    materials = null,
+    deadline = null,
+    priority = 'medium',
+    status = 'pending',
+    source = 'manual',
+    value = null,
+    quoteRef = null,
+    crmData = null,
+  } = input
+
+  let { originId, originType = 'manual' } = input
+
+  // Resolve depth + inherit origin from parent when a parent is given.
+  let depth = 0
+  if (parentTaskId) {
+    const parent = await getTaskById(parentTaskId)
+    if (parent) {
+      depth = (parent.depth || 0) + 1
+      if (!originId) originId = parent.origin_id
+      if (parent.origin_type && !input.originType) originType = parent.origin_type
+    }
+  }
+
+  if (!originId) {
+    throw new Error('createTaskWithLineage: originId is required for root tasks (no parent). Call createOrigin() first.')
+  }
+
+  const record = {
+    title,
+    description,
+    type,
+    parent_task_id: parentTaskId,
+    origin_id: originId,
+    origin_type: originType,
+    resolution: 'open',
+    depth,
+    property_id: propertyId,
+    account_id: accountId,
+    pipeline_deal_id: pipelineDealId,
+    contact,
+    property,
+    materials,
+    deadline,
+    priority,
+    status,
+    source,
+    value,
+    quote_ref: quoteRef,
+    crm_data: crmData,
+    created_at: new Date().toISOString(),
+  }
+
+  const sb = getSupabaseClient()
+  if (sb) {
+    try {
+      const { data, error } = await sb.from('tasks').insert(record).select().single()
+      if (error) throw error
+      return data
+    } catch (e) {
+      console.warn('Supabase createTaskWithLineage failed, falling back to localStorage', e)
+    }
+  }
+
+  // localStorage fallback: mirror into the existing `pf1_tasks` list
+  const local = {
+    id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    ...record,
+  }
+  const tasks = getTasks()
+  tasks.unshift(local)
+  saveTasks(tasks)
+  return local
+}
+
+/**
+ * Batch-create multiple children under the same parent. Used when AI
+ * parses a follow-up meeting into several action items that all belong
+ * under an existing open task.
+ */
+export async function spawnChildTasks(parentTaskId, childTaskDefs = []) {
+  if (!parentTaskId) throw new Error('spawnChildTasks: parentTaskId is required')
+  if (!Array.isArray(childTaskDefs) || childTaskDefs.length === 0) return []
+
+  const parent = await getTaskById(parentTaskId)
+  if (!parent) throw new Error(`spawnChildTasks: parent ${parentTaskId} not found`)
+
+  const created = []
+  for (const def of childTaskDefs) {
+    const child = await createTaskWithLineage({
+      ...def,
+      parentTaskId,
+      originId: def.originId || parent.origin_id,
+      originType: def.originType || parent.origin_type,
+      // Inherit linkage unless the child explicitly overrides
+      propertyId: def.propertyId ?? parent.property_id,
+      accountId:  def.accountId  ?? parent.account_id,
+      pipelineDealId: def.pipelineDealId ?? parent.pipeline_deal_id,
+    })
+    created.push(child)
+  }
+  return created
+}
+
+/**
+ * Resolve a task. Never cascades automatically — if this completes the
+ * last open child under a parent, the UI gets a `cascade_hint` back so
+ * it can prompt the user. The user, not the system, decides whether
+ * the parent is done too.
+ */
+export async function resolveTask(taskId, { resolution, resolvedNote = null } = {}) {
+  if (!RESOLUTIONS[resolution] || resolution === 'open') {
+    throw new Error(`resolveTask: invalid resolution "${resolution}". Must be won|lost|stale|merged|deferred.`)
+  }
+
+  const updates = {
+    resolution,
+    resolved_note: resolvedNote,
+    resolved_at: new Date().toISOString(),
+    // Keep the existing status flow working: resolving always sets
+    // status to 'done' so old list views don't show it as active.
+    status: 'done',
+    updated_at: new Date().toISOString(),
+  }
+
+  const sb = getSupabaseClient()
+  let updated
+  if (sb) {
+    try {
+      const { data, error } = await sb.from('tasks').update(updates).eq('id', taskId).select().single()
+      if (error) throw error
+      updated = data
+    } catch (e) {
+      console.warn('Supabase resolveTask failed, falling back to localStorage', e)
+    }
+  }
+
+  if (!updated) {
+    const tasks = getTasks()
+    const idx = tasks.findIndex(t => t.id === taskId)
+    if (idx >= 0) {
+      tasks[idx] = { ...tasks[idx], ...updates }
+      saveTasks(tasks)
+      updated = tasks[idx]
+    }
+  }
+
+  if (!updated) return { task: null, cascade_hint: null }
+
+  // Cascade hint — do not mutate the parent. Just tell the caller.
+  let cascadeHint = null
+  const parentId = updated.parent_task_id || updated.parentTaskId
+  if (parentId) {
+    const siblings = await listChildrenOfTask(parentId)
+    const stillOpen = siblings.filter(s => s.id !== taskId && (s.resolution === 'open' || !s.resolution))
+    if (stillOpen.length === 0) {
+      const parent = await getTaskById(parentId)
+      if (parent && parent.resolution === 'open') {
+        cascadeHint = {
+          parent_task_id: parentId,
+          parent_title: parent.title || parent.description,
+          message: 'All child tasks are now resolved. Resolve the parent too?',
+        }
+      }
+    }
+  }
+
+  return { task: updated, cascade_hint: cascadeHint }
+}
+
+// ── Read / query helpers ─────────────────────────────────────────────
+
+async function getTaskById(taskId) {
+  const sb = getSupabaseClient()
+  if (sb) {
+    try {
+      const { data, error } = await sb.from('tasks').select('*').eq('id', taskId).single()
+      if (error) throw error
+      return data
+    } catch (e) {
+      // fall through
+    }
+  }
+  return getTasks().find(t => t.id === taskId) || null
+}
+
+async function listChildrenOfTask(parentTaskId) {
+  const sb = getSupabaseClient()
+  if (sb) {
+    try {
+      const { data, error } = await sb.from('tasks').select('*').eq('parent_task_id', parentTaskId)
+      if (error) throw error
+      return data || []
+    } catch (e) {
+      // fall through
+    }
+  }
+  return getTasks().filter(t => (t.parent_task_id || t.parentTaskId) === parentTaskId)
+}
+
+/**
+ * Return the full tree for a given origin as a single nested tree
+ * structure: { ...root, children: [{ ...child, children: [...] }] }.
+ * Multiple roots per origin are allowed — returns an array.
+ */
+export async function getTaskTree(originId) {
+  if (!originId) return []
+
+  let rows = []
+  const sb = getSupabaseClient()
+  if (sb) {
+    try {
+      const { data, error } = await sb
+        .from('task_tree')
+        .select('*')
+        .eq('origin_id', originId)
+        .order('depth', { ascending: true })
+        .order('created_at', { ascending: true })
+      if (error) throw error
+      rows = data || []
+    } catch (e) {
+      console.warn('Supabase getTaskTree failed, falling back to localStorage', e)
+    }
+  }
+  if (rows.length === 0) {
+    rows = getTasks().filter(t => (t.origin_id || t.originId) === originId)
+  }
+
+  // Nest by parent_task_id
+  const byId = {}
+  for (const r of rows) byId[r.id] = { ...r, children: [] }
+
+  const roots = []
+  for (const r of rows) {
+    const node = byId[r.id]
+    const parentId = r.parent_task_id || r.parentTaskId
+    if (parentId && byId[parentId]) {
+      byId[parentId].children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+  return roots
+}
+
+/**
+ * List all task trees grouped by origin, for the tree-view UI. Returns
+ * [{ origin, roots: [...], summary: { total, open, won, lost, ... } }].
+ */
+export async function listTaskTrees(filter = {}) {
+  const origins = await listOrigins(filter)
+  const trees = []
+  for (const origin of origins) {
+    const roots = await getTaskTree(origin.id)
+    // flat summary
+    const flat = []
+    const walk = (nodes) => {
+      for (const n of nodes) {
+        flat.push(n)
+        if (n.children?.length) walk(n.children)
+      }
+    }
+    walk(roots)
+    const summary = {
+      total: flat.length,
+      open: flat.filter(t => (t.resolution || 'open') === 'open').length,
+      won: flat.filter(t => t.resolution === 'won').length,
+      lost: flat.filter(t => t.resolution === 'lost').length,
+      stale: flat.filter(t => t.resolution === 'stale').length,
+      max_depth: flat.reduce((m, t) => Math.max(m, t.depth || 0), 0),
+    }
+    summary.is_terminal = summary.open === 0 && summary.total > 0
+    trees.push({ origin, roots, summary })
+  }
+  return trees
+}
+
+/**
+ * Return the ancestry path from a task up to its root, for breadcrumbs.
+ */
+export async function getTaskAncestry(taskId) {
+  const path = []
+  let currentId = taskId
+  // Guard against cycles — tree shouldn't cycle but belt + suspenders.
+  const visited = new Set()
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId)
+    const t = await getTaskById(currentId)
+    if (!t) break
+    path.unshift(t)
+    currentId = t.parent_task_id || t.parentTaskId
+  }
+  return path
+}
+
+/**
+ * Query the task_tree_summary and task_resolution_patterns views for
+ * the analytics component. Falls back gracefully when Supabase is
+ * not connected (returns zeroed stats so the UI can show its empty
+ * state).
+ */
+export async function getTreeAnalytics(filter = {}) {
+  const sb = getSupabaseClient()
+  const out = { summaries: [], patterns: [], terminal_trees: 0, source: 'localStorage' }
+
+  if (sb) {
+    try {
+      let sq = sb.from('task_tree_summary').select('*')
+      if (filter.accountId) sq = sq.eq('account_id', filter.accountId)
+      if (filter.propertyId) sq = sq.eq('property_id', filter.propertyId)
+      if (filter.originType) sq = sq.eq('origin_type', filter.originType)
+      if (filter.treeOutcome) sq = sq.eq('tree_outcome', filter.treeOutcome)
+      const { data: summaries, error: se } = await sq
+      if (se) throw se
+      out.summaries = summaries || []
+
+      const { data: patterns, error: pe } = await sb.from('task_resolution_patterns').select('*')
+      if (pe) throw pe
+      out.patterns = patterns || []
+
+      out.terminal_trees = out.summaries.filter(s => s.is_terminal).length
+      out.source = 'supabase'
+      return out
+    } catch (e) {
+      console.warn('Supabase getTreeAnalytics failed, falling back to localStorage', e)
+    }
+  }
+
+  // localStorage fallback — compute what we can from flat tasks
+  const origins = lsGetOrigins()
+  const tasks = getTasks()
+  out.summaries = origins.map(o => {
+    const mine = tasks.filter(t => (t.origin_id || t.originId) === o.id)
+    const open = mine.filter(t => (t.resolution || 'open') === 'open').length
+    const won = mine.filter(t => t.resolution === 'won').length
+    const lost = mine.filter(t => t.resolution === 'lost').length
+    return {
+      origin_id: o.id,
+      origin_type: o.origin_type,
+      origin_title: o.title,
+      total_tasks: mine.length,
+      open_tasks: open,
+      won_tasks: won,
+      lost_tasks: lost,
+      is_terminal: mine.length > 0 && open === 0,
+      tree_outcome: won > 0 ? 'won' : (open === 0 && lost > 0 ? 'lost' : (open === 0 ? 'closed' : 'active')),
+    }
+  })
+  out.terminal_trees = out.summaries.filter(s => s.is_terminal).length
+  return out
 }
