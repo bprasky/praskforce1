@@ -27,6 +27,7 @@ import TaskChat from '@/components/TaskChat'
 import OutlookImportPanel from '@/components/OutlookImportPanel'
 import TasksMatrix from '@/components/TasksMatrix'
 import TaskTreeView from '@/components/TaskTreeView'
+import TaskTreeAnalytics from '@/components/TaskTreeAnalytics'
 import { Plus, X, Send, Play, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter, Sparkles, MessageCircle, TrendingUp, Mail, LayoutGrid, List, Users, Tag, Network } from 'lucide-react'
 
 function formatDate(iso) {
@@ -798,7 +799,12 @@ export default function TasksPage() {
 
           {/* Task list — matrix, cards, or tree layout */}
           {view === 'tree' ? (
-            <TaskTreeView onRefresh={() => setTasks(getTasks())} />
+            <>
+              <TaskTreeView onRefresh={() => setTasks(getTasks())} />
+              <div className="mt-6">
+                <TaskTreeAnalytics />
+              </div>
+            </>
           ) : view === 'matrix' ? (
             <TasksMatrix
               tasks={filtered}
