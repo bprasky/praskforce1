@@ -3,6 +3,7 @@ node_modules/
 .env.local
 .env
 .agent-runs/
+screenshots/
 
 # Playwright scraper debug dumps (screenshots + HTML from diagnostic runs)
 scripts/scrapers/.debug/

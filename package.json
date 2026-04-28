@@ -8,7 +8,8 @@
     "start": "next start",
     "runner": "node scripts/runner.js",
     "runner:daemon": "node scripts/runner.js --daemon",
-    "test:puppeteer": "node scripts/test-puppeteer.mjs"
+    "test:puppeteer": "node scripts/test-puppeteer.mjs",
+    "test:address": "node src/lib/__tests__/address.test.js"
   },
   "dependencies": {
     "next": "^15.0.0",

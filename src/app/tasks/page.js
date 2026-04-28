@@ -24,6 +24,7 @@ import { generateProposal } from '@/lib/task-proposals'
 import TaskProposalCard from '@/components/TaskProposalCard'
 import TaskResolutionPanel from '@/components/TaskResolutionPanel'
 import TaskChat from '@/components/TaskChat'
+import TaskDispatcher from '@/components/TaskDispatcher'
 import OutlookImportPanel from '@/components/OutlookImportPanel'
 import TasksMatrix from '@/components/TasksMatrix'
 import TaskTreeView from '@/components/TaskTreeView'
@@ -184,6 +185,17 @@ export default function TasksPage() {
 
     return (
       <div className="space-y-3">
+        {/* Dispatcher: Run / Copy Prompt — every task gets one of these */}
+        {task.status !== 'done' && (
+          <TaskDispatcher
+            task={task}
+            onResolved={() => {
+              const updated = updateTask(task.id, { lifecycle: 'RESOLVED', status: 'done' })
+              setTasks(updated)
+            }}
+          />
+        )}
+
         {/* Learning layer: proposal → resolve → chat */}
         {proposal === null && !isResolving && task.status !== 'done' && (
           <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between">

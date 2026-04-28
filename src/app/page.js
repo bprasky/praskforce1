@@ -5,6 +5,7 @@ import Sidebar from '@/components/Sidebar'
 import SocialSignalsSection from '@/components/SocialSignalsSection'
 import PortalScansSection from '@/components/PortalScansSection'
 import RecentPermitsSection from '@/components/RecentPermitsSection'
+import RunPermitScan from '@/components/RunPermitScan'
 import { Search, SlidersHorizontal, Building2, MapPin, DollarSign, FileText, Users, AlertTriangle, ChevronDown, ChevronRight, Flame, Clock, Database } from 'lucide-react'
 
 const PRI = {
@@ -150,15 +151,18 @@ export default function Dashboard() {
             <h1 className="text-lg font-bold text-gray-900">Leads</h1>
             <p className="text-xs text-gray-500">Permit activity & social signals — ranked by compatibility score</p>
           </div>
-          {dbConnected ? (
-            <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
-              <Database size={12} /> DB Connected
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
-              <Clock size={12} /> Demo Mode
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            <RunPermitScan />
+            {dbConnected ? (
+              <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
+                <Database size={12} /> DB Connected
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+                <Clock size={12} /> Demo Mode
+              </div>
+            )}
+          </div>
         </header>
 
         <div className="p-6">
