@@ -5,7 +5,8 @@ import { getTasks, saveTasks, addTask, updateTask, deleteTask, getMeetings, save
 import { getCompiledPrompt } from '@/components/AgentInstructionsTab'
 import { getRefinedPrompt } from '@/components/AIConfigChat'
 import { getConfig } from '@/lib/config'
-import { Plus, X, Send, Play, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter } from 'lucide-react'
+import { getDispatch, generateTaskPrompt } from '@/lib/dispatcher'
+import { Plus, X, Send, Play, Copy, CheckCircle, Trash2, ChevronDown, ChevronRight, FileText, Zap, AlertTriangle, Clock, Filter, HelpCircle } from 'lucide-react'
 
 function formatDate(iso) {
   if (!iso) return ''
@@ -28,6 +29,7 @@ export default function TasksPage() {
   const [error, setError] = useState(null)
   const [statusFilter, setStatusFilter] = useState('active')
   const [expandedId, setExpandedId] = useState(null)
+  const [copiedTaskId, setCopiedTaskId] = useState(null)
 
   useEffect(() => { setTasks(getTasks()) }, [])
 
@@ -120,6 +122,14 @@ export default function TasksPage() {
     const updated = addTask({ type, description: '', status: 'pending', priority: 'medium', contact: '', property: '' })
     setTasks(updated)
     setExpandedId(updated[0].id)
+  }
+
+  function handleCopyPrompt(task) {
+    const prompt = generateTaskPrompt(task)
+    if (!prompt) return
+    navigator.clipboard.writeText(prompt)
+    setCopiedTaskId(task.id)
+    setTimeout(() => setCopiedTaskId(null), 2000)
   }
 
   return (
@@ -253,11 +263,25 @@ export default function TasksPage() {
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-[10px] text-gray-400">{formatDate(task.created_at)}</span>
                       <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${ts.bg} ${ts.color}`}>{ts.label}</span>
-                      {task.status === 'ready' && (
-                        <button onClick={e => { e.stopPropagation(); handleStatusChange(task.id, 'needs_review') }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px] font-medium hover:bg-amber-600 flex items-center gap-1" title="Run this task">
-                          <Play size={10} /> Run
-                        </button>
-                      )}
+                      {task.status === 'ready' && (() => {
+                        const dispatch = getDispatch(task.type)
+                        if (dispatch.mode === 'copy_prompt') return (
+                          <button onClick={e => { e.stopPropagation(); handleCopyPrompt(task) }} className={`px-2 py-1 rounded text-[10px] font-medium flex items-center gap-1 ${copiedTaskId === task.id ? 'bg-green-500 text-white' : 'bg-amber-500 text-white hover:bg-amber-600'}`} title="Copy agent prompt to clipboard">
+                            {copiedTaskId === task.id ? <><CheckCircle size={10} /> Copied!</> : <><Copy size={10} /> Copy Prompt</>}
+                          </button>
+                        )
+                        if (dispatch.mode === 'wired') return (
+                          <button onClick={e => { e.stopPropagation(); handleStatusChange(task.id, 'running') }} className="px-2 py-1 bg-emerald-600 text-white rounded text-[10px] font-medium hover:bg-emerald-700 flex items-center gap-1" title="Run via Puppeteer">
+                            <Play size={10} /> Run
+                          </button>
+                        )
+                        if (dispatch.mode === 'manual') return null
+                        return (
+                          <button onClick={e => e.stopPropagation()} className="px-2 py-1 bg-gray-200 text-gray-500 rounded text-[10px] font-medium flex items-center gap-1 cursor-default" title={`Category "${task.type}" is not mapped in the dispatch table`}>
+                            <HelpCircle size={10} /> Propose Action
+                          </button>
+                        )
+                      })()}
                       {task.status !== 'done' && (
                         <button onClick={e => { e.stopPropagation(); handleStatusChange(task.id, 'done') }} className="p-1 text-gray-300 hover:text-green-500"><CheckCircle size={14} /></button>
                       )}
