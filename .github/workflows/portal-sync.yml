@@ -16,10 +16,9 @@ name: Portal Sync
 
 on:
   schedule:
-    # Every hour on the top of the hour. Adjust as needed — for the
-    # "ping me every morning" goal you can restrict to e.g. 0 12 * * *
-    # (8am ET daily, since GitHub Actions uses UTC).
-    - cron: '0 * * * *'
+    # Once a day at 12:00 UTC = 8am ET (7am during DST… close enough).
+    # Manual runs still available via workflow_dispatch below.
+    - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       kind:
@@ -34,15 +33,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check Supabase secrets are configured
+        id: check_secrets
+        env:
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SERVICE_KEY" ]; then
+            echo "::warning::Supabase secrets not configured — skipping runner. Add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY under Settings → Secrets and variables → Actions."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.check_secrets.outputs.skip != 'true'
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.check_secrets.outputs.skip != 'true'
         run: npm ci --no-audit --no-fund
 
       - name: Run the job runner
+        if: steps.check_secrets.outputs.skip != 'true'
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
