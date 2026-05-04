@@ -1,9 +1,11 @@
 // PraskForce1 — Shared Puppeteer launcher for scripts/scrapers/*
 //
-// All standalone scrapers import this so they pick up the user's
-// system Chrome via PUPPETEER_EXECUTABLE_PATH and behave consistently
-// with scripts/test-puppeteer.mjs and src/lib/agent-engine.js (the
-// server-side sibling that runs recipes via Next.js API routes).
+// Uses the full `puppeteer` package, which ships with a bundled
+// Chromium that's version-matched to the library — so CI and fresh
+// machines work without any browser pre-install. Set
+// PUPPETEER_EXECUTABLE_PATH to override (useful for local dev to
+// reuse your installed Chrome instead of waiting for the bundled
+// Chromium to start).
 //
 // This file is CommonJS — the scripts/ directory mixes CJS and ESM,
 // and scripts/runner.js (CJS) requires these scraper modules.
@@ -11,38 +13,22 @@
 const { existsSync, mkdirSync, writeFileSync } = require('node:fs')
 const path = require('node:path')
 
-const WINDOWS_CHROME_DEFAULTS = [
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-]
-
-function pickChromePath() {
-  const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH
-  if (fromEnv) return fromEnv
-  for (const p of WINDOWS_CHROME_DEFAULTS) {
-    if (existsSync(p)) return p
-  }
-  return WINDOWS_CHROME_DEFAULTS[0]
-}
-
 async function launchBrowser(logger = console.log) {
-  // puppeteer-core is an ESM default export; require works via
-  // Node's CJS-ESM interop since it ships a CJS entry.
-  const puppeteer = require('puppeteer-core')
+  const puppeteer = require('puppeteer')
 
-  const executablePath = pickChromePath()
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null
   const headless = (process.env.PF1_HEADLESS || process.env.PUPPETEER_HEADLESS || 'false').toLowerCase() === 'true'
   const slowMo = Number(process.env.PUPPETEER_SLOWMO || '50')
 
-  if (!existsSync(executablePath)) {
+  if (executablePath && !existsSync(executablePath)) {
     throw new Error(
-      `Chrome not found at "${executablePath}". Set PUPPETEER_EXECUTABLE_PATH in .env.local to your chrome.exe path.`
+      `PUPPETEER_EXECUTABLE_PATH is set to "${executablePath}" but that file does not exist. Unset it to use the bundled Chromium, or fix the path.`
     )
   }
 
-  logger(`    launching Chrome (headless=${headless}, slowMo=${slowMo})`)
+  logger(`    launching Chrome (headless=${headless}, slowMo=${slowMo}, ${executablePath ? `path=${executablePath}` : 'bundled Chromium'})`)
   return puppeteer.launch({
-    executablePath,
+    ...(executablePath ? { executablePath } : {}),
     headless,
     slowMo,
     defaultViewport: { width: 1400, height: 900 },
@@ -91,5 +77,4 @@ module.exports = {
   launchBrowser,
   dumpPage,
   sleep,
-  pickChromePath,
 }

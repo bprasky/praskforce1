@@ -64,24 +64,22 @@ function makeLogger(run) {
 
 // ── Puppeteer launch ──
 async function launchBrowser(log) {
-  const puppeteer = (await import('puppeteer-core')).default
+  const puppeteer = (await import('puppeteer')).default
 
-  const executablePath =
-    process.env.PUPPETEER_EXECUTABLE_PATH ||
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null
   const headless = (process.env.PUPPETEER_HEADLESS || 'false').toLowerCase() === 'true'
   const slowMo = Number(process.env.PUPPETEER_SLOWMO || '50')
 
-  await log('info', 'launch', 'Launching Chrome', { executablePath, headless, slowMo })
+  await log('info', 'launch', 'Launching Chrome', { executablePath: executablePath || '(bundled)', headless, slowMo })
 
-  if (!existsSync(executablePath)) {
+  if (executablePath && !existsSync(executablePath)) {
     throw new Error(
-      `Chrome not found at "${executablePath}". Set PUPPETEER_EXECUTABLE_PATH in .env.local.`
+      `PUPPETEER_EXECUTABLE_PATH is set to "${executablePath}" but that file does not exist. Unset it to use the bundled Chromium, or fix the path.`
     )
   }
 
   const browser = await puppeteer.launch({
-    executablePath,
+    ...(executablePath ? { executablePath } : {}),
     headless,
     slowMo,
     defaultViewport: { width: 1366, height: 900 },

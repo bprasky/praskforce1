@@ -8,11 +8,11 @@
 //   node scripts/test-puppeteer.mjs
 //
 // Reads:
-//   PUPPETEER_EXECUTABLE_PATH (defaults to common Windows Chrome path)
+//   PUPPETEER_EXECUTABLE_PATH (optional override; defaults to bundled Chromium)
 //   PUPPETEER_HEADLESS        (default "false")
 //   PUPPETEER_SLOWMO          (default "50")
 
-import puppeteer from 'puppeteer-core'
+import puppeteer from 'puppeteer'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,35 +38,21 @@ async function loadDotEnv() {
   }
 }
 
-const WINDOWS_CHROME_DEFAULTS = [
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-]
-
-function pickChromePath() {
-  const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH
-  if (fromEnv) return fromEnv
-  for (const p of WINDOWS_CHROME_DEFAULTS) {
-    if (existsSync(p)) return p
-  }
-  return WINDOWS_CHROME_DEFAULTS[0] // best guess; will fail loudly if missing
-}
-
 async function main() {
   await loadDotEnv()
 
-  const executablePath = pickChromePath()
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null
   const headless = (process.env.PUPPETEER_HEADLESS || 'false').toLowerCase() === 'true'
   const slowMo = Number(process.env.PUPPETEER_SLOWMO || '50')
 
   console.log('━━━ PraskForce1 Puppeteer Smoke Test ━━━')
-  console.log('Chrome path :', executablePath)
+  console.log('Chrome path :', executablePath || '(bundled Chromium)')
   console.log('Headless    :', headless)
   console.log('SlowMo      :', slowMo, 'ms')
 
-  if (!existsSync(executablePath)) {
-    console.error('\n[FAIL] Chrome not found at the path above.')
-    console.error('Fix: set PUPPETEER_EXECUTABLE_PATH in .env.local to your chrome.exe.')
+  if (executablePath && !existsSync(executablePath)) {
+    console.error('\n[FAIL] PUPPETEER_EXECUTABLE_PATH points to a missing file:', executablePath)
+    console.error('Fix: unset it to use the bundled Chromium, or fix the path in .env.local.')
     process.exit(1)
   }
 
@@ -74,7 +60,7 @@ async function main() {
   try {
     console.log('\n[1/4] Launching Chrome...')
     browser = await puppeteer.launch({
-      executablePath,
+      ...(executablePath ? { executablePath } : {}),
       headless,
       slowMo,
       defaultViewport: { width: 1280, height: 800 },
